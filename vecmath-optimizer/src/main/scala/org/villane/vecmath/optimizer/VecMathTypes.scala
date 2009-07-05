@@ -20,6 +20,7 @@ trait VecMathTypes { self: VecMathTransformer =>
 
   // Vector, Matrix, Transform types
   val FT = FloatClass.tpe
+  val NativeScalar = FT
   val FEXTT = definitions.getClass("org.villane.vecmath.FloatExtensions").tpe
   val V2T = definitions.getClass("org.villane.vecmath.Vector2").tpe
   val V2O = definitions.getModule("org.villane.vecmath.Vector2")
@@ -58,6 +59,18 @@ trait VecMathTypes { self: VecMathTransformer =>
   object V2 {
     def apply() = TypeTree(V2T)
     def unapply(tr: Tree): Boolean = isV2(tr.tpe)
+    def unapply(tpe: Type): Boolean = isV2(tpe)
+  }
+
+  object V2Ob {
+    def apply() = V2O
+    def unapply(tr: Tree): Boolean = tr.tpe == V2O.tpe || tr.tpe.widen == V2O.tpe
+    def unapply(tpe: Type): Boolean = tpe == V2O.tpe || tpe.widen == V2O.tpe
+  }
+
+  object M22 {
+    def apply() = TypeTree(M22T)
+    def unapply(tr: Tree): Boolean = isM22(tr.tpe)
   }
 
 }
