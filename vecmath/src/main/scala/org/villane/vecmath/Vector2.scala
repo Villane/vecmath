@@ -37,8 +37,6 @@ object Vector2 {
  * Idea: provide mutable version for big computations
  */
 case class Vector2(x: Float, y: Float) {
-  def +(a: Float) = Vector2(x + a, y + a)
-  def -(a: Float) = Vector2(x - a, y - a)
   def *(a: Float) = Vector2(x * a, y * a)
   def /(a: Float) = Vector2(x / a, y / a)
 

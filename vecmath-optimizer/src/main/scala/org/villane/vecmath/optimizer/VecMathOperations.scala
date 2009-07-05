@@ -46,7 +46,7 @@ trait VecMathOperations { self: VecMathTransformer =>
   val Length = newTermName("length")
   val LengthSqr = newTermName("lengthSquared")
   // V2 Binary
-  val SimpleV2FOps = Set(nme.ADD, nme.SUB, nme.MUL, nme.DIV)
+  val SimpleV2FOps = Set(nme.MUL, nme.DIV)
   val SimpleV2V2Ops = Set(nme.ADD, nme.SUB)
   val CrossOp = Set(newTermName("$u00D7"), newTermName("cross"))
   val DotOp = Set(newTermName("$u2219"), newTermName("dot"))

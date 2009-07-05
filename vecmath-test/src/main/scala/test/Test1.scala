@@ -6,7 +6,7 @@ import org.villane.vecmath.optimizer.sr
 
 @sr object Test1 {
   @sr def compute(center: Vector2) = {
-    val v1 = center * 2f - 2f
+    val v1 = center * 2f * 1.3f
     v1
   }
 
@@ -47,7 +47,7 @@ import org.villane.vecmath.optimizer.sr
 
   @sr def selectUnary(v1: Vector2) = {
     val v = v1
-    val b = v.abs + 1
+    val b = v.abs * 1.2f
     Vector2(b.x, v.y)
   }
 
@@ -56,7 +56,7 @@ import org.villane.vecmath.optimizer.sr
     val b = v.unit
     val c = v.unit
     // TODO this is currently pretty bad: does (v1 + 2).unit twice!!!
-    v = (v1 + 2).unit
+    v = (v1 - Vector2(2,2)).unit
     val d = v.unit
     d
   }
