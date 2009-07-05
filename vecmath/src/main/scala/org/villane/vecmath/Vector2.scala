@@ -10,6 +10,7 @@ object Vector2 {
   val One = Vector2(1, 1)
   val XUnit = Vector2(1, 0)
   val YUnit = Vector2(0, 1)
+
   def polar(r: Float, theta: Float) = Vector2(cos(theta) * r, sin(theta) * r)
 
   def lerp(begin: Vector2, end: Vector2, scalar: Float) = Vector2(
@@ -58,13 +59,6 @@ case class Vector2(x: Float, y: Float) {
   def swap = Vector2(y, x)
   def abs = Vector2(x.abs, y.abs)
 
-  /** Polar coordinates */
-  def theta = atan2(y, x)
-  def θ = atan2(y, x)
-
-  def to(v: Vector2) = new Vector2Range(this, v, Vector2.One)
-  def times(n: Int) = new Vector2Times(this, n, Vector2.One)
-
   /**
    * Since normalization is a simple operation, in cases where speed is desired,
    * but the length before normalization is also needed, use this instead:
@@ -77,8 +71,12 @@ case class Vector2(x: Float, y: Float) {
   /** @see normalize */
   def unit = this / length
 
+  /** Polar coordinates */
   def length = sqrt(x * x + y * y)
   def lengthSquared = x * x + y * y
+
+  def theta = atan2(y, x)
+  def θ = atan2(y, x)
 
   // Unlike with float extensions, calling clamp on an existing vector doesn't effect performance, so this shouldn't be static.
   def clamp(low: Vector2, high: Vector2) = Preamble.max(low, Preamble.min(this, high))
@@ -92,6 +90,9 @@ case class Vector2(x: Float, y: Float) {
 
   override def productPrefix = ""
   
+  def to(v: Vector2) = new Vector2Range(this, v, Vector2.One)
+  def times(n: Int) = new Vector2Times(this, n, Vector2.One)
+
   // for debugging only
   Vector2.creationCount += 1 
 }
