@@ -34,9 +34,6 @@ case class Matrix22(a11: Float, a12: Float, a21: Float, a22: Float) {
   def col1 = Vector2(a11, a21)
   def col2 = Vector2(a12, a22)
 
-  // TODO +,-,*,/ Float
-  def +(a: Float) = Matrix22(a11 + a, a12 + a, a21 + a, a22 + a)
-
   def +(m: Matrix22) = Matrix22(a11 + m.a11, a12 + m.a12,
                                 a21 + m.a21, a22 + m.a22)
 
