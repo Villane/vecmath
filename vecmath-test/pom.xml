@@ -45,7 +45,7 @@
 						<compilerPlugin>
 							<groupId>org.villane.vecmath</groupId>
 							<artifactId>vecmath-optimizer</artifactId>
-							<version>0.0.1-SNAPSHOT</version>
+							<version>0.1.0-SNAPSHOT</version>
 						</compilerPlugin>
 					</compilerPlugins>
 				</configuration>

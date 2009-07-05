@@ -63,26 +63,25 @@
 				</executions>
 				<configuration>
 					<scalaVersion>${scala.version}</scalaVersion>
-					<!-- <args>
-						<arg>-optimise</arg>
-						<arg>-Yinline</arg>
-					</args> -->
+					<!--
+						<args> <arg>-optimise</arg> <arg>-Yinline</arg> </args>
+					-->
 				</configuration>
 			</plugin>
-            <plugin>
-                <artifactId>maven-compiler-plugin</artifactId>
-                <configuration>
-                    <source>1.6</source>
-                    <target>1.6</target>
-                    <encoding>UTF-8</encoding>
-                </configuration>
-            </plugin>
-            <plugin>
-                <artifactId>maven-resources-plugin</artifactId>
-                <configuration>
-                    <encoding>UTF-8</encoding>
-                </configuration>
-            </plugin>
+			<plugin>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<configuration>
+					<source>1.6</source>
+					<target>1.6</target>
+					<encoding>UTF-8</encoding>
+				</configuration>
+			</plugin>
+			<plugin>
+				<artifactId>maven-resources-plugin</artifactId>
+				<configuration>
+					<encoding>UTF-8</encoding>
+				</configuration>
+			</plugin>
 		</plugins>
 	</build>
 </project>
