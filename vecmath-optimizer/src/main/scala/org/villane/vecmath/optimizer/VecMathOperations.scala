@@ -1,8 +1,12 @@
 package org.villane.vecmath.optimizer
 
-trait VecMathOperations { self: VecMathTransformer =>
+trait VecMathOperations { self: VecMathOptimizer =>
   import global._
-  import definitions._             // standard classes and methods
+  import definitions._
+
+  // Constants
+  val Zero = newTermName("Zero")
+  val One = newTermName("One")
 
   // Math
   val Sqrt = newTermName("sqrt")
@@ -10,31 +14,6 @@ trait VecMathOperations { self: VecMathTransformer =>
   val Cos = newTermName("cos")
   val ATan2 = newTermName("atan2")
   val FloatExt = newTermName("floatToFloatExtensions")
-
-  // Vector2
-  val Zero = newTermName("Zero")
-  val One = newTermName("One")
-  val XUnit = newTermName("XUnit")
-  val YUnit = newTermName("YUnit")
-  val Polar = newTermName("polar")
-
-  val X = newTermName("x")
-  val Y = newTermName("y")
-  def ortho(coord: Name) = if (coord == X) Y else X
-
-  // Matrix22
-  val A11 = newTermName("a11")
-  val A12 = newTermName("a12")
-  val A21 = newTermName("a21")
-  val A22 = newTermName("a22")
-  val Col1 = newTermName("col1")
-  val Col2 = newTermName("col2")
-
-  var scalarComponents = Set(X, Y, A11, A12, A21, A22)
-  def isScalarComponent(name: Name) = scalarComponents contains name
-  object ScalarComponent {
-    def unapply(name: Name) = isScalarComponent(name)
-  }
 
   // V2 Unary
   val Normal = newTermName("normal")
@@ -61,4 +40,7 @@ trait VecMathOperations { self: VecMathTransformer =>
   // Matrix2 binary
   val MulTrans  = encode("**")
 
+  // Transform2
+  val Pos = "pos" // position
+  val Rot = "rot" // rotation
 }

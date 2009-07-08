@@ -7,11 +7,9 @@ import nsc.transform.Transform
 import nsc.transform.TypingTransformers
 import nsc.symtab.Flags._
 
-trait ScalarReplacementInfo { self: VecMathTransformer =>
+trait ScalarReplacementInfo { self: VecMathOptimizer =>
   import global._
-  import definitions._             // standard classes and methods
-
-  def shouldOptimize(m: MemberDef) = m.mods.annotations.exists(_.tpe == srAnnot.tpe)
+  import definitions._
 
   trait ExpectedType {
     def tpe: Type
@@ -42,11 +40,25 @@ trait ScalarReplacementInfo { self: VecMathTransformer =>
       // TODO flatten!
     }
   }
+  def inScope[T](tree: Tree)(block: => T) = {
+    enterScope(ScopeInfo(currentScope, tree))
+    try { block } finally exitScope
+  }
 
   case class ScopeInfo(parent: Option[ScopeInfo], tree: Tree) {
+
+    def method = {
+      var scp = this
+      while (scp.parent.isDefined) scp = scp.parent.get
+      if (scp.tree.isInstanceOf[DefDef])
+        scp.tree
+      else
+        throw new Error("Not fun!")
+    }
+
     def v2(name: Name) = inlinedVar(name).get.asInstanceOf[IV2]
     def hasV2(name: Name) = inlinedVar(name) match {
-      case Some(IV2(_)) => true
+      case Some(IV2(_,_)) => true
       case _ => false
     }
     def apply(name: Name) = inlinedVar(name).get
@@ -60,9 +72,17 @@ trait ScalarReplacementInfo { self: VecMathTransformer =>
     def next(namePart: String) = {
       val n = _genV2.head
       _genV2 = _genV2.tail
-      tree.symbol.newValue(tree.pos, "$anon$" + namePart + n)
+      method.symbol.newValue(method.pos, "$anon$" + namePart + n)
     }
-    val cache = collection.mutable.Map[Tree, Name]()
+
+    // other generated variables
+    val genVars = new collection.mutable.HashMap[Name, Symbol]
+
+    val cache = new collection.mutable.HashMap[Tree, Symbol] {
+      override def elemEquals(key1: Tree, key2: Tree) = key1 equalsStructure key2
+      override def elemHashCode(key: Tree) = key.hashCodeStructure
+    }
+
     def cached(v: Tree) = {
       var c = cache
       while (! (c contains v) && parent.isDefined) c = parent.get.cache
@@ -85,8 +105,11 @@ trait ScalarReplacementInfo { self: VecMathTransformer =>
   }
 
   /* inlined variable, actually scalar replaced variable */
-  sealed abstract class Inlined(val vDef: ValDef) {
-    def isMutable = vDef.mods.isVariable
+  sealed abstract class Inlined(val name: Name, val vDef: Tree) {
+    def isMutable = vDef match {
+      case vDef @ ValDef(_,_,_,_) => vDef.mods.isVariable
+      case _ => false
+    }
     def scalar(comp: Name): TermSymbol
     def deScalar: Tree
     var backedOut = false
@@ -107,7 +130,7 @@ trait ScalarReplacementInfo { self: VecMathTransformer =>
   }*/
 
   /** inlined vector2 */
-  case class IV2(override val vDef: ValDef) extends Inlined(vDef) {
+  case class IV2(override val name: Name, override val vDef: Tree) extends Inlined(name, vDef) {
     def scalar(comp: Name) = {
       usageCount += 1
       comp match {
@@ -124,16 +147,26 @@ trait ScalarReplacementInfo { self: VecMathTransformer =>
       New(V2(), List(List(Ident(x), Ident(y))))
     }
 
-    val x = vDef.symbol.newValue(vDef.pos, vDef.name + "$x")
-    val y = vDef.symbol.newValue(vDef.pos, vDef.name + "$y")
+    val (x,y) = if (vDef.isInstanceOf[ValDef])
+      (vDef.symbol.newValue(vDef.pos, name + "$x"),
+       vDef.symbol.newValue(vDef.pos, name + "$y"))
+    else {
+      // Maybe we should always do it like this?
+      (scope.method.symbol.newValue(vDef.pos, name + "$x"),
+       scope.method.symbol.newValue(vDef.pos, name + "$y"))
+    }
+
     var xUsageCount = 0
     var yUsageCount = 0
 
-    x.setInfo(FT)
-    y.setInfo(FT)
-    if (vDef.mods.isVariable) {
+    x.setInfo(FT).setFlag(SYNTHETIC)
+    y.setInfo(FT).setFlag(SYNTHETIC)
+    if (isMutable) {
       x.setFlag(MUTABLE)
       y.setFlag(MUTABLE)
+    } else {
+      x.setFlag(FINAL)
+      y.setFlag(FINAL)
     }
 
     var lengthN: Option[TermSymbol] = None
@@ -167,12 +200,15 @@ trait ScalarReplacementInfo { self: VecMathTransformer =>
       //val lnSqr = vDef.symbol.newValue(vDef.pos, vDef.name + "$lengthSquared")
       //lengthSqrN = Some(lnSqr)
       //lnSqr.setInfo(FT)
-      val ln = vDef.symbol.newValue(vDef.pos, vDef.name + "$length")
+      val ln = scope.method.symbol.newValue(scope.method.pos, name + "$length")
       lengthN = Some(ln)
-      ln.setInfo(FT)
-      if (vDef.mods.isVariable) {
+      ln.setInfo(FT).setFlag(SYNTHETIC)
+      if (isMutable) {
         //lnSqr.setFlag(MUTABLE)
         ln.setFlag(MUTABLE)
+      } else {
+        //lnSqr.setFlag(FINAL)
+        ln.setFlag(FINAL)
       }
       val lenSqr = UTBinOp(
         UTBinOp(Ident(x), nme.MUL, Ident(x)),
@@ -185,7 +221,7 @@ trait ScalarReplacementInfo { self: VecMathTransformer =>
     }
   }
 
-  case class IM22(override val vDef: ValDef) extends Inlined(vDef) {
+  case class IM22(override val name: Name, override val vDef: Tree) extends Inlined(name, vDef) {
     def scalar(coord: Name) = {
       usageCount += 1
       coord match {
@@ -205,24 +241,29 @@ trait ScalarReplacementInfo { self: VecMathTransformer =>
       ))))
     }
 
-    val a11 = vDef.symbol.newValue(vDef.pos, vDef.name + "$a11")
-    val a12 = vDef.symbol.newValue(vDef.pos, vDef.name + "$a12")
-    val a21 = vDef.symbol.newValue(vDef.pos, vDef.name + "$a21")
-    val a22 = vDef.symbol.newValue(vDef.pos, vDef.name + "$a22")
+    val a11 = vDef.symbol.newValue(vDef.pos, name + "$a11")
+    val a12 = vDef.symbol.newValue(vDef.pos, name + "$a12")
+    val a21 = vDef.symbol.newValue(vDef.pos, name + "$a21")
+    val a22 = vDef.symbol.newValue(vDef.pos, name + "$a22")
     var a11UsageCount = 0
     var a12UsageCount = 0
     var a21UsageCount = 0
     var a22UsageCount = 0
 
-    a11.setInfo(FT)
-    a12.setInfo(FT)
-    a21.setInfo(FT)
-    a22.setInfo(FT)
-    if (vDef.mods.isVariable) {
+    a11.setInfo(FT).setFlag(SYNTHETIC)
+    a12.setInfo(FT).setFlag(SYNTHETIC)
+    a21.setInfo(FT).setFlag(SYNTHETIC)
+    a22.setInfo(FT).setFlag(SYNTHETIC)
+    if (isMutable) {
       a11.setFlag(MUTABLE)
       a12.setFlag(MUTABLE)
       a21.setFlag(MUTABLE)
       a22.setFlag(MUTABLE)
+    } else {
+      a11.setFlag(FINAL)
+      a12.setFlag(FINAL)
+      a21.setFlag(FINAL)
+      a22.setFlag(FINAL)
     }
 
   }

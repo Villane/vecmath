@@ -7,12 +7,13 @@ import nsc.transform.Transform
 import nsc.transform.TypingTransformers
 import nsc.symtab.Flags._
 
-trait VecMathTypes { self: VecMathTransformer =>
+trait VecMathTypes { self: VecMathOptimizer =>
   import global._
   import definitions._             // standard classes and methods
 
   // Annotation to mark classes and methods as optimizable
   val srAnnot = definitions.getClass("org.villane.vecmath.optimizer.sr")
+  val nosrAnnot = definitions.getClass("org.villane.vecmath.optimizer.nosr")
 
   // Math function containers
   val StdMath = Ident(getModule("scala.Math"))
@@ -25,6 +26,7 @@ trait VecMathTypes { self: VecMathTransformer =>
   val V2T = definitions.getClass("org.villane.vecmath.Vector2").tpe
   val V2O = definitions.getModule("org.villane.vecmath.Vector2")
   val M22T = definitions.getClass("org.villane.vecmath.Matrix22").tpe
+  val M22O = definitions.getModule("org.villane.vecmath.Matrix22")
   val T2T = definitions.getClass("org.villane.vecmath.Transform2").tpe
 
   // isScalar = actually, is implicitly convertible to "native" scalar (Float)
@@ -71,6 +73,11 @@ trait VecMathTypes { self: VecMathTransformer =>
   object M22 {
     def apply() = TypeTree(M22T)
     def unapply(tr: Tree): Boolean = isM22(tr.tpe)
+  }
+
+  object T2 {
+    def apply() = TypeTree(T2T)
+    def unapply(tr: Tree): Boolean = isT2(tr.tpe)
   }
 
 }
