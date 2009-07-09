@@ -19,16 +19,24 @@ trait ScalarizerSupport { self: VecMathOptimizer =>
   }*/
 
   trait Scalarizable {
-    type ObjectType <: AnyRef
     type ClassType <: AnyRef
-    def objectType: Type
+    def compObject: Option[Symbol]
     def classType: Type
     def constants: Map[Name, ClassType]
     def creators: Map[Name, (Seq[Tree], Name) => Tree]
     def scalarComponents: List[Name]
     def scalarValue(obj: ClassType, name: Name): Float
-    def isObjectOf(tpe: Type) = tpe == objectType || tpe.widen == objectType
+    def isObjectOf(tpe: Type) = compObject match {
+      case Some(obj) => tpe == obj.tpe || tpe.widen == obj.tpe
+      case None => false
+    }
     def isClassOf(tpe: Type) = tpe == classType || tpe.widen == classType
+
+    def deScalarize(args: collection.Map[Name, Tree]) =
+      // By default we expect the cons to take scalar arguments in order
+      New(TypeTree(classType), List(scalarComponents map args))
+
+    def newScalarizedVar(vDef: ValDef): Inlined
   }
 
   // Untyped
@@ -53,7 +61,8 @@ trait ScalarizerSupport { self: VecMathOptimizer =>
 
     object ScalarizableObject {
       def unapply(tpe: Type): Option[Scalarizable] = tpe match {
-        case V2Ob() => Some(V2Scalarizable)
+        case V2Object() => Some(V2Scalarizable)
+        case M22Object() => Some(M22Scalarizable)
         case _ => None
       }
       def unapply(tr: Tree): Option[Scalarizable] = unapply(tr.tpe)

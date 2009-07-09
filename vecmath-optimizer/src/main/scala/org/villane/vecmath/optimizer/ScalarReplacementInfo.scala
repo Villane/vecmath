@@ -56,11 +56,11 @@ trait ScalarReplacementInfo { self: VecMathOptimizer =>
         throw new Error("Not fun!")
     }
 
-    def v2(name: Name) = inlinedVar(name).get.asInstanceOf[IV2]
+    /*def v2(name: Name) = inlinedVar(name).get.asInstanceOf[IV2]
     def hasV2(name: Name) = inlinedVar(name) match {
       case Some(IV2(_,_)) => true
       case _ => false
-    }
+    }*/
     def apply(name: Name) = inlinedVar(name).get
     def update(name: Name, iv: Inlined) = scope.inlinedVs(name) = iv
 
@@ -105,13 +105,14 @@ trait ScalarReplacementInfo { self: VecMathOptimizer =>
   }
 
   /* inlined variable, actually scalar replaced variable */
-  sealed abstract class Inlined(val name: Name, val vDef: Tree) {
+  abstract class Inlined(val name: Name, val vDef: Tree) {
     def isMutable = vDef match {
       case vDef @ ValDef(_,_,_,_) => vDef.mods.isVariable
       case _ => false
     }
+    def components: Map[Name, TermSymbol]
     def scalar(comp: Name): TermSymbol
-    def deScalar: Tree
+    def deScalarize: Tree
     var backedOut = false
     // count usage as scalars
     var usageCount = 0
@@ -129,156 +130,45 @@ trait ScalarReplacementInfo { self: VecMathOptimizer =>
     preTemps += typed(ValDef(iv.y, vectorToScalar(tree, Y)))
   }*/
 
-  /** inlined vector2 */
-  case class IV2(override val name: Name, override val vDef: Tree) extends Inlined(name, vDef) {
+  class GenericScalarized(val sc: Scalarizable, override val name: Name, override val vDef: Tree)
+    extends Inlined(name, vDef) {
+
+    val components = Map(sc.scalarComponents map { n =>
+      // used to be: if (vDef.isInstanceOf[ValDef]) vDef.symbol.newValue(vDef.pos, name + "$x")
+      val cSym = scope.method.symbol.newValue(vDef.pos, name + "$" + n)
+      cSym.setInfo(NativeScalar).setFlag(SYNTHETIC)
+      cSym.setFlag(if (isMutable) MUTABLE else FINAL)
+      n -> cSym
+    }:_*)
+
+    val componentUsageCount = collection.mutable.Map[Name, Int](sc.scalarComponents map {
+      n => n -> 0
+    }:_*)
+
     def scalar(comp: Name) = {
       usageCount += 1
-      comp match {
-        case X =>
-          xUsageCount += 1
-          x
-        case Y =>
-          yUsageCount += 1
-          y
-      }
+      componentUsageCount(comp) += 1
+      components(comp)
     }
-    def deScalar = {
+
+    def deScalarize = {
       deScalarCount += 1
-      New(V2(), List(List(Ident(x), Ident(y))))
-    }
-
-    val (x,y) = if (vDef.isInstanceOf[ValDef])
-      (vDef.symbol.newValue(vDef.pos, name + "$x"),
-       vDef.symbol.newValue(vDef.pos, name + "$y"))
-    else {
-      // Maybe we should always do it like this?
-      (scope.method.symbol.newValue(vDef.pos, name + "$x"),
-       scope.method.symbol.newValue(vDef.pos, name + "$y"))
-    }
-
-    var xUsageCount = 0
-    var yUsageCount = 0
-
-    x.setInfo(FT).setFlag(SYNTHETIC)
-    y.setInfo(FT).setFlag(SYNTHETIC)
-    if (isMutable) {
-      x.setFlag(MUTABLE)
-      y.setFlag(MUTABLE)
-    } else {
-      x.setFlag(FINAL)
-      y.setFlag(FINAL)
-    }
-
-    var lengthN: Option[TermSymbol] = None
-    var lengthDirty = false
-
-    def forceLengthCaching =
-      if (lengthN.isEmpty) {
-        createLengthVal
-      } else if (lengthDirty) {
-        lengthDirty = false
-        createLengthAssign
-      } else {
-        EmptyTree
-      }
-
-    def createLengthAssign = {
-      assert(lengthN.isDefined && lengthN.get.isVariable)
-      val ln = lengthN.get
-      val lenSqr = UTBinOp(
-        UTBinOp(Ident(x), nme.MUL, Ident(x)),
-        nme.ADD,
-        UTBinOp(Ident(y), nme.MUL, Ident(y))
-      )
-      val vLen = Assign(Ident(ln), typer.typed(UTBinOp(VecMath, Sqrt, lenSqr)))
-      scope.preTemps += vLen
-      vLen
-    }
-
-    //var lengthSqrN: Option[TermSymbol] = None
-    def createLengthVal = {
-      //val lnSqr = vDef.symbol.newValue(vDef.pos, vDef.name + "$lengthSquared")
-      //lengthSqrN = Some(lnSqr)
-      //lnSqr.setInfo(FT)
-      val ln = scope.method.symbol.newValue(scope.method.pos, name + "$length")
-      lengthN = Some(ln)
-      ln.setInfo(FT).setFlag(SYNTHETIC)
-      if (isMutable) {
-        //lnSqr.setFlag(MUTABLE)
-        ln.setFlag(MUTABLE)
-      } else {
-        //lnSqr.setFlag(FINAL)
-        ln.setFlag(FINAL)
-      }
-      val lenSqr = UTBinOp(
-        UTBinOp(Ident(x), nme.MUL, Ident(x)),
-        nme.ADD,
-        UTBinOp(Ident(y), nme.MUL, Ident(y))
-      )
-      val vLen = ValDef(ln, typer.typed(UTBinOp(VecMath, Sqrt, lenSqr)))
-      scope.preTemps += vLen
-      vLen
-    }
-  }
-
-  case class IM22(override val name: Name, override val vDef: Tree) extends Inlined(name, vDef) {
-    def scalar(coord: Name) = {
-      usageCount += 1
-      coord match {
-        case A11 => a11UsageCount += 1; a11
-        case A11 => a12UsageCount += 1; a12
-        case A11 => a21UsageCount += 1; a21
-        case A11 => a22UsageCount += 1; a22
-      }
-    }
-    def deScalar = {
-      deScalarCount += 1
-      typer.typed(New(M22(), List(List(
-        Ident(a11),
-        Ident(a12),
-        Ident(a21),
-        Ident(a22)
-      ))))
-    }
-
-    val a11 = vDef.symbol.newValue(vDef.pos, name + "$a11")
-    val a12 = vDef.symbol.newValue(vDef.pos, name + "$a12")
-    val a21 = vDef.symbol.newValue(vDef.pos, name + "$a21")
-    val a22 = vDef.symbol.newValue(vDef.pos, name + "$a22")
-    var a11UsageCount = 0
-    var a12UsageCount = 0
-    var a21UsageCount = 0
-    var a22UsageCount = 0
-
-    a11.setInfo(FT).setFlag(SYNTHETIC)
-    a12.setInfo(FT).setFlag(SYNTHETIC)
-    a21.setInfo(FT).setFlag(SYNTHETIC)
-    a22.setInfo(FT).setFlag(SYNTHETIC)
-    if (isMutable) {
-      a11.setFlag(MUTABLE)
-      a12.setFlag(MUTABLE)
-      a21.setFlag(MUTABLE)
-      a22.setFlag(MUTABLE)
-    } else {
-      a11.setFlag(FINAL)
-      a12.setFlag(FINAL)
-      a21.setFlag(FINAL)
-      a22.setFlag(FINAL)
+      sc.deScalarize(components mapElements { n => Ident(n) })
     }
 
   }
 
-  // Scalarize for specific coordinate (X | Y)
+  // Scalarize for specific coordinate (X,Y,A11,A12 etc.)
   def scalar(v: Tree, coord: Name) = v match {
     case Ident(name) if scope.inlinedVar(name).isDefined =>
-      Ident(scope.v2(name).scalar(coord))
+      Ident(scope(name).scalar(coord))
     case _ => Select(v, coord)
   }
 
   // Descaralrize an escaping variable. Ex. new Vector2(v$x, v$y)
-  def deScalar(v: Tree) = v match {
+  def deScalarize(v: Tree) = v match {
     case Ident(name) if scope.inlinedVar(name).isDefined =>
-      scope(name).deScalar
+      scope(name).deScalarize
     case _ => v
   }
 

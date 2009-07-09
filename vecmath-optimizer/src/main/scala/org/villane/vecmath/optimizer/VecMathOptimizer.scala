@@ -167,16 +167,19 @@ class VecMathOptimizer(val global: Global) extends PluginComponent
     }
 
     // Local Variable
-    case tr @ ValDef(mods, name, tpe, rhs) if !isReference(rhs) =>
+    case tr @ ValDef(mods, name, tpe, rhs) =>
       tpe match {
-        case V2() => // Vector2
-          val iv = IV2(name, tr)
+        case Scalarizable(sc) if !isReference(rhs) =>
+          val iv = sc.newScalarizedVar(tr)
           currentVar = Some(iv)
+          scope(name) = iv // TODO remove when backed out
           try {
-            scope(name) = iv
-            val xv = expectX(typed(ValDef(iv.x, transform(rhs))))
-            val yv = expectY(typed(ValDef(iv.y, transform(rhs))))
-            val stats = scope.preTemps.toList ::: List(xv, yv)
+            var valDefs = new collection.mutable.ListBuffer[Tree]
+            for ((cName, cSym) <- iv.components)
+              valDefs += expecting(Scalarized(sc.classType, cName)) {
+                typed(ValDef(cSym, transform(rhs)))
+              }
+            val stats = scope.preTemps.toList ::: valDefs.toList
             scope.preTemps.clear
             Sequence(stats)
           } catch {
@@ -186,23 +189,6 @@ class VecMathOptimizer(val global: Global) extends PluginComponent
               throw bo
           } finally {
             currentVar = None
-          }
-        case M22() => // Matrix22
-          val iv = IM22(name, tr)
-          try {
-            scope(name) = iv
-            val a11v = expectA11 { typed(ValDef(iv.a11, transform(rhs))) }
-            val a12v = expectA12 { typed(ValDef(iv.a12, transform(rhs))) }
-            val a21v = expectA21 { typed(ValDef(iv.a21, transform(rhs))) }
-            val a22v = expectA22 { typed(ValDef(iv.a22, transform(rhs))) }
-            val stats = scope.preTemps.toList ::: List(a11v, a12v, a21v, a22v)
-            scope.preTemps.clear
-            Sequence(stats)
-          } catch {
-            case bo: BackOut =>
-              iv.backedOut = true
-              bo.iv = Some(iv)
-              throw bo
           }
         case F() => // Float
           val res = expectS { transform(rhs) }
@@ -215,29 +201,21 @@ class VecMathOptimizer(val global: Global) extends PluginComponent
       }
 
     // Assignment to one of the variables we inlined
-    case tr @ Assign(Ident(name), rhs)
-      if scope.inlinedVar(name).isDefined =>
-      val iv = scope(name)
+    case Assign(Ident(name), rhs) if scope.inlinedVar(name).isDefined =>
+      val iv = scope(name).asInstanceOf[GenericScalarized]
+      var varAssigns = new collection.mutable.ListBuffer[Tree]
       try {
-      iv match {
-        case v @ IV2(_,_) =>
-          val xa = expectX { typed(Assign(Ident(v.x), transform(rhs))) }
-          val ya = expectY { typed(Assign(Ident(v.y), transform(rhs))) }
-          val stats = scope.preTemps.toList ::: List(xa, ya)
-          scope.preTemps.clear
-          if (v.isMutable && v.lengthN.isDefined) v.lengthDirty = true
-          Sequence(stats)
-        case v @ IM22(_,_) =>
-          val a11a = expectA11 { typed(Assign(Ident(v.a11), transform(rhs))) }
-          val a12a = expectA12 { typed(Assign(Ident(v.a12), transform(rhs))) }
-          val a21a = expectA21 { typed(Assign(Ident(v.a21), transform(rhs))) }
-          val a22a = expectA22 { typed(Assign(Ident(v.a22), transform(rhs))) }
-          val stats = scope.preTemps.toList ::: List(a11a, a12a, a21a, a22a)
-          scope.preTemps.clear
-          // cache determinant?
-          // if (v.isMutable && v.lengthN.isDefined) v.lengthDirty = true
-          Sequence(stats)
-      }
+        for ((cName, cSym) <- iv.components)
+          varAssigns += expecting(Scalarized(iv.sc.classType, cName)) {
+            typed(Assign(Ident(cSym), transform(rhs)))
+          }
+        val stats = scope.preTemps.toList ::: varAssigns.toList
+        scope.preTemps.clear
+        iv match {
+          case v@IV2(_,_) => if (v.isMutable && v.lengthN.isDefined) v.lengthDirty = true
+          case _ =>
+        }
+        Sequence(stats)
       } catch {
         case bo: BackOut =>
           iv.backedOut = true
@@ -253,6 +231,18 @@ class VecMathOptimizer(val global: Global) extends PluginComponent
       case ActualType(V2T) => NewObj(V2(), expectX(xf(x)), expectY(xf(y)))
       case _ => super.transform(tree)
     }
+
+  // HACK this outer pattern is a workaround for a bug in Scala 2.7.5, SCreator will not match!!!
+  case Apply(Select(ScalarizableObject(sc), name), args)
+    if sc.creators contains name => /*tree match {
+    // Scalarizable creators e.g. Vector2.polar(...)
+    case SCreator(scrz, name, args) =>*/
+    println("SCreator: " + tree)
+      expecting match {
+        case Scalarized(typ, comp) if sc.isClassOf(typ) => scalarizeCreator(sc, name, args, comp)
+        case _ => super.transform(tree)
+      }
+  //}
 
     // Binary Operator
     case tr @ Apply(Select(left00, op), List(arg00)) =>
@@ -319,17 +309,26 @@ class VecMathOptimizer(val global: Global) extends PluginComponent
         case _ => super.transform(tr)
       }
 
+    /*case tr @ Apply(Select(left00, op), args1) =>
+      tr match {
+        case SCreator(x,y,z) =>
+      println(tr)
+      scalarizeCreator(x, y, args1, X)
+        case _ => tr
+        }
+      println("SCreator:" + SCreator.unapply(tr))
+      if (op == Polar) {
+        println("ISV2Obj:" + V2Object.unapply(left00))
+        left00 match {
+          case ScalarizableObject(sc) => println("HASPOLAR:" + sc.creators.contains(op))
+        }
+      }
+      tr*/
+
     // Scalarizable constants e.g. Vector2.XUnit
     case SConstant(scalarizable, name) => expecting match {
       case Scalarized(typ, comp) if scalarizable.isClassOf(typ) =>
         scalarizeConstant(scalarizable, name, comp)
-      case _ => super.transform(tree)
-    }
-
-    // Scalarizable creators e.g. Vector2.polar
-    case SCreator(scalarizable, name, args) => expecting match {
-      case Scalarized(typ, comp) if scalarizable.isClassOf(typ) =>
-        scalarizeCreator(scalarizable, name, args, comp)
       case _ => super.transform(tree)
     }
 
@@ -376,8 +375,8 @@ class VecMathOptimizer(val global: Global) extends PluginComponent
     case tr @ Ident(name) if scope.inlinedVar(name).isDefined =>
       expecting match {
         case Scalarized(_, comp) => typed(scalar(tr, comp))
-        case Escaping(name, _) => typed(deScalar(tr))
-        // ONLY ESCAPING!!! case ActualType(_) => typed(deScalar(tr))
+        case Escaping(name, _) => typed(deScalarize(tr))
+        // ONLY ESCAPING!!! case ActualType(_) => typed(deScalarize(tr))
         case _ => tr
       }
 

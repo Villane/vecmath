@@ -11,6 +11,21 @@ trait Matrix22Scalarizer extends ScalarizerSupport { self: VecMathOptimizer =>
   import global._
   import definitions._
 
+  val M22T = definitions.getClass("org.villane.vecmath.Matrix22").tpe
+  val M22O = definitions.getModule("org.villane.vecmath.Matrix22")
+
+  def isM22(tpe: Type) = tpe == M22T || tpe.widen == M22T
+  object M22 {
+    def apply() = TypeTree(M22T)
+    def unapply(tpe: Type): Boolean = isM22(tpe)
+    def unapply(tr: Tree): Boolean = unapply(tr.tpe)
+  }
+  object M22Object {
+    def apply() = M22O
+    def unapply(tpe: Type): Boolean = tpe == M22O.tpe || tpe.widen == M22O.tpe
+    def unapply(tr: Tree): Boolean = unapply(tr.tpe)
+  }
+
   // Scalar components
   val A11 = newTermName("a11")
   val A12 = newTermName("a12")
@@ -24,14 +39,13 @@ trait Matrix22Scalarizer extends ScalarizerSupport { self: VecMathOptimizer =>
   val Identity = newTermName("Identity")
 
   // Creator names
-  val Rotation = newTermName("Rotation")
+  val Rotation = newTermName("rotation")
 
   trait M22Transformer { self: VMTransformer =>
 
     object M22Scalarizable extends Scalarizable {
-      type ObjectType = Matrix22.type
       type ClassType = Matrix22
-      val objectType = M22O.tpe
+      val compObject = Some(M22O)
       val classType = M22T
 
       val scalarComponents = List(A11, A12, A21, A22)
@@ -54,11 +68,21 @@ trait Matrix22Scalarizer extends ScalarizerSupport { self: VecMathOptimizer =>
         case A22 => m.a22
       }
 
+      def newScalarizedVar(vDef: ValDef) = IM22(vDef.name, vDef)
+
+    }
+
+    case class IM22(override val name: Name, override val vDef: Tree)
+      extends GenericScalarized(M22Scalarizable, name, vDef) {
+      def a11 = components(A11)
+      def a12 = components(A12)
+      def a21 = components(A21)
+      def a22 = components(A22)
     }
 
     def scalarizeM22Rotation(args: Seq[Tree], comp: Name) = {
       val angle = xf(args(0))
-      // TODO cache cos & sin in variables
+      // TODO MUST CACHE cos & sin in variables!!!
       // (c, -s, s, c)
       comp match {
         case A11 => MathFun(VecMath, Cos, angle)

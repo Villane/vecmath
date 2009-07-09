@@ -11,6 +11,21 @@ trait Vector2Scalarizer extends ScalarizerSupport { self: VecMathOptimizer =>
   import global._
   import definitions._
 
+  val V2T = definitions.getClass("org.villane.vecmath.Vector2").tpe
+  val V2O = definitions.getModule("org.villane.vecmath.Vector2")
+
+  def isV2(tpe: Type) = tpe == V2T || tpe.widen == V2T
+  object V2 {
+    def apply() = TypeTree(V2T)
+    def unapply(tpe: Type): Boolean = isV2(tpe)
+    def unapply(tr: Tree): Boolean = unapply(tr.tpe)
+  }
+  object V2Object {
+    def apply() = V2O
+    def unapply(tpe: Type): Boolean = tpe == V2O.tpe || tpe.widen == V2O.tpe
+    def unapply(tr: Tree): Boolean = unapply(tr.tpe)
+  }
+
   // Scalar component names
   val X = newTermName("x")
   val Y = newTermName("y")
@@ -26,9 +41,8 @@ trait Vector2Scalarizer extends ScalarizerSupport { self: VecMathOptimizer =>
   trait V2Transformer { self: VMTransformer =>
   
     object V2Scalarizable extends Scalarizable {
-      type ObjectType = Vector2.type
       type ClassType = Vector2
-      val objectType = V2O.tpe
+      val compObject = Some(V2O)
       val classType = V2T
 
       val scalarComponents = List(X, Y)
@@ -50,6 +64,67 @@ trait Vector2Scalarizer extends ScalarizerSupport { self: VecMathOptimizer =>
         case Y => v.y
       }
 
+      def newScalarizedVar(vDef: ValDef) = IV2(vDef.name, vDef)
+
+    }
+
+    /** inlined vector2 */
+    case class IV2(override val name: Name, override val vDef: Tree)
+      extends GenericScalarized(V2Scalarizable, name, vDef) {
+
+      def x = components(X)
+      def y = components(Y)
+        
+      var lengthN: Option[TermSymbol] = None
+      var lengthDirty = false
+
+      def forceLengthCaching =
+        if (lengthN.isEmpty) {
+          createLengthVal
+        } else if (lengthDirty) {
+          lengthDirty = false
+          createLengthAssign
+        } else {
+          EmptyTree
+        }
+
+      def createLengthAssign = {
+        assert(lengthN.isDefined && lengthN.get.isVariable)
+        val ln = lengthN.get
+        val lenSqr = UTBinOp(
+          UTBinOp(Ident(x), nme.MUL, Ident(x)),
+          nme.ADD,
+          UTBinOp(Ident(y), nme.MUL, Ident(y))
+        )
+        val vLen = Assign(Ident(ln), typer.typed(UTBinOp(VecMath, Sqrt, lenSqr)))
+        scope.preTemps += vLen
+        vLen
+      }
+
+      //var lengthSqrN: Option[TermSymbol] = None
+      def createLengthVal = {
+        //val lnSqr = vDef.symbol.newValue(vDef.pos, vDef.name + "$lengthSquared")
+        //lengthSqrN = Some(lnSqr)
+        //lnSqr.setInfo(FT)
+        val ln = scope.method.symbol.newValue(scope.method.pos, name + "$length")
+        lengthN = Some(ln)
+        ln.setInfo(FT).setFlag(SYNTHETIC)
+        if (isMutable) {
+          //lnSqr.setFlag(MUTABLE)
+          ln.setFlag(MUTABLE)
+        } else {
+          //lnSqr.setFlag(FINAL)
+          ln.setFlag(FINAL)
+        }
+        val lenSqr = UTBinOp(
+          UTBinOp(Ident(x), nme.MUL, Ident(x)),
+          nme.ADD,
+          UTBinOp(Ident(y), nme.MUL, Ident(y))
+        )
+        val vLen = ValDef(ln, typer.typed(UTBinOp(VecMath, Sqrt, lenSqr)))
+        scope.preTemps += vLen
+        vLen
+      }
     }
 
     // Creators
@@ -77,7 +152,7 @@ trait Vector2Scalarizer extends ScalarizerSupport { self: VecMathOptimizer =>
 
     def scalarizeV2Length(v: Tree) = v match {
       case Ident(name) if scope.inlinedVar(name).isDefined =>
-        val iv = scope.v2(name)
+        val iv = scope(name).asInstanceOf[IV2]
         val ref = expecting match {
           case Escaping(_,_) => iv.lengthN.isDefined && !iv.lengthDirty
           case _ => true
@@ -105,7 +180,7 @@ trait Vector2Scalarizer extends ScalarizerSupport { self: VecMathOptimizer =>
             case Some(sym) => sym
             case None => cacheV2(v)
           }
-          val iv = scope.v2(cvn.name)
+          val iv = scope(cvn.name).asInstanceOf[IV2]
           iv.forceLengthCaching
           typed(Ident(iv.lengthN.get))
         } else

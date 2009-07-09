@@ -23,10 +23,6 @@ trait VecMathTypes { self: VecMathOptimizer =>
   val FT = FloatClass.tpe
   val NativeScalar = FT
   val FEXTT = definitions.getClass("org.villane.vecmath.FloatExtensions").tpe
-  val V2T = definitions.getClass("org.villane.vecmath.Vector2").tpe
-  val V2O = definitions.getModule("org.villane.vecmath.Vector2")
-  val M22T = definitions.getClass("org.villane.vecmath.Matrix22").tpe
-  val M22O = definitions.getModule("org.villane.vecmath.Matrix22")
   val T2T = definitions.getClass("org.villane.vecmath.Transform2").tpe
 
   // isScalar = actually, is implicitly convertible to "native" scalar (Float)
@@ -41,8 +37,6 @@ trait VecMathTypes { self: VecMathOptimizer =>
 
   def isF(tpe: Type) = tpe == FT || tpe.widen == FT
   def isFEXT(tpe: Type) = tpe == FEXTT || tpe.widen == FEXTT
-  def isV2(tpe: Type) = tpe == V2T || tpe.widen == V2T // TODO tpe.normalize?
-  def isM22(tpe: Type) = tpe == M22T || tpe.widen == M22T
   def isT2(tpe: Type) = tpe == T2T || tpe.widen == T2T
 
   object FEXT {
@@ -56,23 +50,6 @@ trait VecMathTypes { self: VecMathOptimizer =>
   object F {
     def apply() = TypeTree(FT)
     def unapply(tr: Tree) = isF(tr.tpe)
-  }
-
-  object V2 {
-    def apply() = TypeTree(V2T)
-    def unapply(tr: Tree): Boolean = isV2(tr.tpe)
-    def unapply(tpe: Type): Boolean = isV2(tpe)
-  }
-
-  object V2Ob {
-    def apply() = V2O
-    def unapply(tr: Tree): Boolean = tr.tpe == V2O.tpe || tr.tpe.widen == V2O.tpe
-    def unapply(tpe: Type): Boolean = tpe == V2O.tpe || tpe.widen == V2O.tpe
-  }
-
-  object M22 {
-    def apply() = TypeTree(M22T)
-    def unapply(tr: Tree): Boolean = isM22(tr.tpe)
   }
 
   object T2 {
