@@ -7,7 +7,7 @@ import nsc.transform.Transform
 import nsc.transform.TypingTransformers
 import nsc.symtab.Flags._
 
-trait Vector2Scalarizer extends ScalarizerSupport { self: VecMathOptimizer =>
+trait Vector2Scalarizer extends ScalarizerSupport with ScalarReplacementInfo { self: VecMathOptimizer =>
   import global._
   import definitions._
 
@@ -64,17 +64,20 @@ trait Vector2Scalarizer extends ScalarizerSupport { self: VecMathOptimizer =>
         case Y => v.y
       }
 
-      def newScalarizedVar(vDef: ValDef) = IV2(vDef.name, vDef)
+      def newNormalVar(vDef: ValDef) = new IV2(vDef.name, vDef) with NormalVariable
+      def newScalarizedVar(vDef: ValDef) = new IV2(vDef.name, vDef) with ScalarizedVariable
+      def newScalarizedVar(name: Name, tree: Tree) = new IV2(name, tree) with ScalarizedVariable
 
+      def optimizeSelect(tree: Select) = optimizeUnaryOp(tree)
     }
 
     /** inlined vector2 */
-    case class IV2(override val name: Name, override val vDef: Tree)
-      extends GenericScalarized(V2Scalarizable, name, vDef) {
+    abstract class IV2(override val name: Name, override val vDef: Tree) extends Variable(name, vDef) {
+      val sc = V2Scalarizable
 
       def x = components(X)
       def y = components(Y)
-        
+
       var lengthN: Option[TermSymbol] = None
       var lengthDirty = false
 
@@ -92,9 +95,9 @@ trait Vector2Scalarizer extends ScalarizerSupport { self: VecMathOptimizer =>
         assert(lengthN.isDefined && lengthN.get.isVariable)
         val ln = lengthN.get
         val lenSqr = UTBinOp(
-          UTBinOp(Ident(x), nme.MUL, Ident(x)),
+          UTBinOp(x, nme.MUL, x),
           nme.ADD,
-          UTBinOp(Ident(y), nme.MUL, Ident(y))
+          UTBinOp(y, nme.MUL, y)
         )
         val vLen = Assign(Ident(ln), typer.typed(UTBinOp(VecMath, Sqrt, lenSqr)))
         scope.preTemps += vLen
@@ -117,9 +120,9 @@ trait Vector2Scalarizer extends ScalarizerSupport { self: VecMathOptimizer =>
           ln.setFlag(FINAL)
         }
         val lenSqr = UTBinOp(
-          UTBinOp(Ident(x), nme.MUL, Ident(x)),
+          UTBinOp(x, nme.MUL, x),
           nme.ADD,
-          UTBinOp(Ident(y), nme.MUL, Ident(y))
+          UTBinOp(y, nme.MUL, y)
         )
         val vLen = ValDef(ln, typer.typed(UTBinOp(VecMath, Sqrt, lenSqr)))
         scope.preTemps += vLen
@@ -148,10 +151,43 @@ trait Vector2Scalarizer extends ScalarizerSupport { self: VecMathOptimizer =>
       )
     }
 
+    def optimizeUnaryOp(tree: Select) = {
+      val v = tree.qualifier
+      val op = tree.selector
+      op match {
+        case Length => scalarizeV2Length(v)
+        case LengthSqr => scalarizeV2LengthSquared(v)
+        case Theta() => scalarizeV2Theta(v)
+        case Normal => expecting match {
+          case Scalarized(_, X) => expectY(xf(v))
+          case Scalarized(_, Y) => UnOp(expectX(xf(v)), nme.UNARY_-)
+          case _ => superXf(tree)
+        }
+        case Swap => expecting match {
+          case Scalarized(_, X) => expectY(xf(v))
+          case Scalarized(_, Y) => expectX(xf(v))
+          case _ => superXf(tree)
+        }
+        case nme.UNARY_- => UnOp(xf(v), nme.UNARY_-)
+        case Abs => expecting match {
+          case Scalarized(_, comp) => BinOp(StdMath, Abs, transform(v))
+          case _ => superXf(tree)
+        }
+        case Normalize() => expecting match {
+          case Scalarized(_, comp) =>
+            BinOp(xf(v), nme.DIV, scalarizeV2Length(v))
+          case Escaping(_, _) => NewObj(V2(), expectX(xf(tree)), expectY(xf(tree)))
+          case _ => superXf(tree)
+        }
+        case _ => superXf(tree)
+      }
+    }
+
+    
     // Scalar returning UnOps
 
     def scalarizeV2Length(v: Tree) = v match {
-      case Ident(name) if scope.inlinedVar(name).isDefined =>
+      case Ident(name) if scope.inlinedVar(name).isDefined || scope.normalVar(name).isDefined =>
         val iv = scope(name).asInstanceOf[IV2]
         val ref = expecting match {
           case Escaping(_,_) => iv.lengthN.isDefined && !iv.lengthDirty
@@ -162,31 +198,24 @@ trait Vector2Scalarizer extends ScalarizerSupport { self: VecMathOptimizer =>
           typed(Ident(iv.lengthN.get))
         } else
           MathFun(VecMath, Sqrt, scalarizeV2LengthSquared(v))
-      /*case t if t.symbol != null && t.symbol.isStable =>
-        val iv = ANONYMOUS*/
-      case tr if isReference(tr) && tr.symbol.isStable =>
-        // TODO temporary cache for unstables!!!
-        if (true) {
-          val cvn = scope.cache.get(v) match {
-            case Some(sym) => sym
-            case None => cacheS(v, MathFun(VecMath, Sqrt, scalarizeV2LengthSquared(v)), "length")
-          }
-          Ident(cvn)
-        } else
-          MathFun(VecMath, Sqrt, scalarizeV2LengthSquared(v))
-      case tr if tr.symbol.isStable =>
-        if (true) {
-          val cvn = scope.cache.get(v) match {
-            case Some(sym) => sym
-            case None => cacheV2(v)
-          }
-          val iv = scope(cvn.name).asInstanceOf[IV2]
-          iv.forceLengthCaching
-          typed(Ident(iv.lengthN.get))
-        } else
-          MathFun(VecMath, Sqrt, scalarizeV2LengthSquared(v))
+      case _ if isReference(v) =>
+        // If it's a reference, not an expression we can optimize, cache only the length!
+        val cvn = scope.cache.get(Select(v, Length)) match {
+          case Some(ScalarVar(sym, _, _)) => sym
+          case None => cacheS(Select(v, Length), MathFun(VecMath, Sqrt, scalarizeV2LengthSquared(v)), "length")
+        }
+        Ident(cvn)
       case _ =>
-        MathFun(VecMath, Sqrt, scalarizeV2LengthSquared(v))
+        // Otherwise create a new anonymous vector
+        val cvn = scope.cache.get(v) match {
+          case Some(ScalarVar(sym,_,_)) => sym
+          case None => cacheV2(v)
+        }
+        val iv = scope(cvn.name).asInstanceOf[IV2]
+        iv.forceLengthCaching
+        typed(Ident(iv.lengthN.get))
+      /*case _ =>
+        MathFun(VecMath, Sqrt, scalarizeV2LengthSquared(v))*/
         // worst case, we create a temp vector
         // UnOp(deScalar(v), Length)
     }

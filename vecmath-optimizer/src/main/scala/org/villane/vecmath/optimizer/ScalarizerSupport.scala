@@ -36,7 +36,10 @@ trait ScalarizerSupport { self: VecMathOptimizer =>
       // By default we expect the cons to take scalar arguments in order
       New(TypeTree(classType), List(scalarComponents map args))
 
-    def newScalarizedVar(vDef: ValDef): Inlined
+    def newNormalVar(vDef: ValDef): NormalVariable
+    def newScalarizedVar(vDef: ValDef): ScalarizedVariable
+
+    def optimizeSelect(tree: Select): Tree
   }
 
   // Untyped
@@ -67,6 +70,8 @@ trait ScalarizerSupport { self: VecMathOptimizer =>
       }
       def unapply(tr: Tree): Option[Scalarizable] = unapply(tr.tpe)
     }
+
+    def isScalarizable(tr: Tree) = Scalarizable.unapply(tr).isDefined
 
     /** Matches Types (or Types of Trees) that are Scalarizable */
     object Scalarizable {

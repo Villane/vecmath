@@ -58,15 +58,12 @@ case class Vector2(x: Float, y: Float) {
   def abs = Vector2(x.abs, y.abs)
 
   /**
-   * Since normalization is a simple operation, in cases where speed is desired,
-   * but the length before normalization is also needed, use this instead:
+   * If you need length before normalization, use this instead:
    * 
    * val len = v.length
    * v /= len
-   * 
    */
   def normalize = this / length
-  /** @see normalize */
   def unit = this / length
 
   /** Polar coordinates */

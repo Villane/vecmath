@@ -7,7 +7,7 @@ import nsc.transform.Transform
 import nsc.transform.TypingTransformers
 import nsc.symtab.Flags._
 
-trait Matrix22Scalarizer extends ScalarizerSupport { self: VecMathOptimizer =>
+trait Matrix22Scalarizer extends ScalarizerSupport with ScalarReplacementInfo { self: VecMathOptimizer =>
   import global._
   import definitions._
 
@@ -68,12 +68,15 @@ trait Matrix22Scalarizer extends ScalarizerSupport { self: VecMathOptimizer =>
         case A22 => m.a22
       }
 
-      def newScalarizedVar(vDef: ValDef) = IM22(vDef.name, vDef)
+      def newNormalVar(vDef: ValDef) = new IM22(vDef.name, vDef) with NormalVariable
+      def newScalarizedVar(vDef: ValDef) = new IM22(vDef.name, vDef) with ScalarizedVariable
+
+      def optimizeSelect(m: Select) = m
 
     }
 
-    case class IM22(override val name: Name, override val vDef: Tree)
-      extends GenericScalarized(M22Scalarizable, name, vDef) {
+    abstract class IM22(override val name: Name, override val vDef: Tree) extends Variable(name, vDef) {
+      val sc = M22Scalarizable
       def a11 = components(A11)
       def a12 = components(A12)
       def a21 = components(A21)

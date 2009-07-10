@@ -58,8 +58,27 @@ import org.villane.vecmath.optimizer.nosr
     val c = v.unit
     // TODO this is currently pretty bad: does (v1 + 2).unit twice!!!
     v = (v1 - Vector2(2,2)).unit
+    v = v1.unit
     val d = v.unit
     d
+  }
+
+  def selectNormalizeManualInline(v1: Vector2) = {
+    var v = v1
+    var v$length = v.length
+    val b$x = v.x / v$length
+    val b$y = v.y / v$length
+    val c$x = v.x / v$length
+    val c$y = v.y / v$length
+    // TODO this is currently pretty bad: does (v1 + 2).unit twice!!!
+    val $anon$x = v1.x - 2
+    val $anon$y = v1.y - 2
+    val $anon$length0 = Preamble.sqrt($anon$x * $anon$x + $anon$y * $anon$y)
+    v = new Vector2($anon$x / $anon$length0, $anon$y / $anon$length0).unit
+    v$length = v.length
+    val d$x = v.x / v$length
+    val d$y = v.y / v$length
+    new Vector2(d$x, d$y)
   }
 
   def selectLen(v1: Vector2) = {
@@ -101,6 +120,7 @@ import org.villane.vecmath.optimizer.nosr
       selectNormalize(2, 4),
       selectLen(2, 4)
     )
+    println(selectNormalize(2, 4) == selectNormalizeManualInline(2, 4))
     println(res mkString "\n")
   }
 }

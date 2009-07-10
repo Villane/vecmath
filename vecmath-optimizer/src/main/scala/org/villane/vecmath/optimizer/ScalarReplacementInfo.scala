@@ -45,8 +45,11 @@ trait ScalarReplacementInfo { self: VecMathOptimizer =>
     try { block } finally exitScope
   }
 
+  case class ScalarVar(symbol: Symbol, temp: Boolean, tree: Tree)
+
   case class ScopeInfo(parent: Option[ScopeInfo], tree: Tree) {
 
+    def isMehtod = tree.isInstanceOf[DefDef]
     def method = {
       var scp = this
       while (scp.parent.isDefined) scp = scp.parent.get
@@ -55,14 +58,6 @@ trait ScalarReplacementInfo { self: VecMathOptimizer =>
       else
         throw new Error("Not fun!")
     }
-
-    /*def v2(name: Name) = inlinedVar(name).get.asInstanceOf[IV2]
-    def hasV2(name: Name) = inlinedVar(name) match {
-      case Some(IV2(_,_)) => true
-      case _ => false
-    }*/
-    def apply(name: Name) = inlinedVar(name).get
-    def update(name: Name, iv: Inlined) = scope.inlinedVs(name) = iv
 
     // statements inserted !before! the current scalarization being done
     val preTemps = new collection.mutable.ListBuffer[Tree]
@@ -76,9 +71,9 @@ trait ScalarReplacementInfo { self: VecMathOptimizer =>
     }
 
     // other generated variables
-    val genVars = new collection.mutable.HashMap[Name, Symbol]
+    val genVars = new collection.mutable.HashMap[Name, ScalarVar]
 
-    val cache = new collection.mutable.HashMap[Tree, Symbol] {
+    val cache = new collection.mutable.HashMap[Tree, ScalarVar] {
       override def elemEquals(key1: Tree, key2: Tree) = key1 equalsStructure key2
       override def elemHashCode(key: Tree) = key.hashCodeStructure
     }
@@ -89,56 +84,75 @@ trait ScalarReplacementInfo { self: VecMathOptimizer =>
       c.get(v)
     }
 
-    def isMehtod = tree.isInstanceOf[DefDef]
-    def inlinedVar(name: Name) = {
-      var vs = inlinedVs
-      while (! (vs contains name) && parent.isDefined) vs = parent.get.inlinedVs
-      vs.get(name)
+    def apply(name: Name) = (inlinedVar(name) orElse normalVar(name)).get
+
+    object normalVar {
+      def apply(name: Name) = {
+        var vs = normalVars
+        while (! (vs contains name) && parent.isDefined) vs = parent.get.normalVars
+        vs.get(name)
+      }
+      def update(name: Name, v: NormalVariable) = scope.normalVars(name) = v
     }
-    // inlined Vectors per method
-    val inlinedVs = collection.mutable.Map[Name, Inlined]()
-    val backoutVs = collection.mutable.Map[Name, Inlined]()
+
+    object inlinedVar {
+      def apply(name: Name) = {
+        var vs = inlinedVars
+        while (! (vs contains name) && parent.isDefined) vs = parent.get.inlinedVars
+        vs.get(name)
+      }
+      def update(name: Name, v: ScalarizedVariable) = inlinedVars(name) = v
+    }
+
+    private val normalVars = collection.mutable.Map[Name, NormalVariable]()
+    private val inlinedVars = collection.mutable.Map[Name, ScalarizedVariable]()
+    private val backoutVars = collection.mutable.Map[Name, ScalarizedVariable]()
   }
 
   case class BackOut(msg: String) extends Throwable(msg) {
-    var iv: Option[Inlined] = None
+    var iv: Option[Variable] = None
   }
 
-  /* inlined variable, actually scalar replaced variable */
-  abstract class Inlined(val name: Name, val vDef: Tree) {
+  /** variable, maybe scalar replaced or maybe not */
+  abstract class Variable(val name: Name, val vDef: Tree) {
     def isMutable = vDef match {
       case vDef @ ValDef(_,_,_,_) => vDef.mods.isVariable
       case _ => false
     }
-    def components: Map[Name, TermSymbol]
-    def scalar(comp: Name): TermSymbol
+    def isScalarized: Boolean
+    def sc: Scalarizable
+    def components: Map[Name, Tree]
+    def scalar(comp: Name): Tree
     def deScalarize: Tree
-    var backedOut = false
-    // count usage as scalars
+  }
+
+  /** not scalar replaced variable */
+  trait NormalVariable extends Variable {
+    val isScalarized = false
+
+    val components = Map(sc.scalarComponents map { n => n -> Select(Ident(vDef.symbol), n) }:_*)
+
+    def scalar(comp: Name) = components(comp)
+    def deScalarize = Ident(name)
+  }
+
+  /** scalar replaced variable */
+  trait ScalarizedVariable extends Variable {
+    val isScalarized = true
+
+    // count usage of scalar components
     var usageCount = 0
     // count descalarization
     var deScalarCount = 0
-  }
-
-  /*def anonIV2(tree: Tree) = {
-    val sym = nextV2
-    sym.clearFlag(MUTABLE)
-    val tr = ValDef(sym, EmptyTree)
-    val iv = IV2(tr)
-    inlinedVs(name) = iv
-    preTemps += typed(ValDef(iv.x, vectorToScalar(tree, X)))
-    preTemps += typed(ValDef(iv.y, vectorToScalar(tree, Y)))
-  }*/
-
-  class GenericScalarized(val sc: Scalarizable, override val name: Name, override val vDef: Tree)
-    extends Inlined(name, vDef) {
+    // whether scalarization was backed out of
+    var backedOut = false
 
     val components = Map(sc.scalarComponents map { n =>
       // used to be: if (vDef.isInstanceOf[ValDef]) vDef.symbol.newValue(vDef.pos, name + "$x")
       val cSym = scope.method.symbol.newValue(vDef.pos, name + "$" + n)
       cSym.setInfo(NativeScalar).setFlag(SYNTHETIC)
       cSym.setFlag(if (isMutable) MUTABLE else FINAL)
-      n -> cSym
+      n -> Ident(cSym)
     }:_*)
 
     val componentUsageCount = collection.mutable.Map[Name, Int](sc.scalarComponents map {
@@ -153,7 +167,7 @@ trait ScalarReplacementInfo { self: VecMathOptimizer =>
 
     def deScalarize = {
       deScalarCount += 1
-      sc.deScalarize(components mapElements { n => Ident(n) })
+      sc.deScalarize(components)
     }
 
   }
@@ -161,7 +175,7 @@ trait ScalarReplacementInfo { self: VecMathOptimizer =>
   // Scalarize for specific coordinate (X,Y,A11,A12 etc.)
   def scalar(v: Tree, coord: Name) = v match {
     case Ident(name) if scope.inlinedVar(name).isDefined =>
-      Ident(scope(name).scalar(coord))
+      scope(name).scalar(coord)
     case _ => Select(v, coord)
   }
 
