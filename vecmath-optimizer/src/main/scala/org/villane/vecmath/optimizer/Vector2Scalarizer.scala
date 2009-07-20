@@ -39,7 +39,10 @@ trait Vector2Scalarizer extends ScalarizerSupport with ScalarReplacementInfo { s
   val Lerp = newTermName("lerp")
 
   trait V2Transformer { self: VMTransformer =>
-  
+
+    def expectV2X[T](block: => T) = expecting(Scalarized(V2T, X))(block)
+    def expectV2Y[T](block: => T) = expecting(Scalarized(V2T, Y))(block)
+
     object V2Scalarizable extends Scalarizable {
       type ClassType = Vector2
       val compObject = Some(V2O)
@@ -59,6 +62,11 @@ trait Vector2Scalarizer extends ScalarizerSupport with ScalarReplacementInfo { s
         Lerp -> scalarizeV2Lerp
       )
 
+      def componentFromArgs(args: List[Tree], comp: Name) = comp match {
+        case X => args(0)
+        case Y => args(1)
+      }
+
       def scalarValue(v: Vector2, name: Name) = name match {
         case X => v.x
         case Y => v.y
@@ -68,7 +76,7 @@ trait Vector2Scalarizer extends ScalarizerSupport with ScalarReplacementInfo { s
       def newScalarizedVar(vDef: ValDef) = new IV2(vDef.name, vDef) with ScalarizedVariable
       def newScalarizedVar(name: Name, tree: Tree) = new IV2(name, tree) with ScalarizedVariable
 
-      def optimizeSelect(tree: Select) = optimizeUnaryOp(tree)
+      def optimizeSelect(tree: Select) = optimizeV2UnaryOp(tree)
     }
 
     /** inlined vector2 */
@@ -151,7 +159,7 @@ trait Vector2Scalarizer extends ScalarizerSupport with ScalarReplacementInfo { s
       )
     }
 
-    def optimizeUnaryOp(tree: Select) = {
+    def optimizeV2UnaryOp(tree: Select) = {
       val v = tree.qualifier
       val op = tree.selector
       op match {
@@ -159,13 +167,13 @@ trait Vector2Scalarizer extends ScalarizerSupport with ScalarReplacementInfo { s
         case LengthSqr => scalarizeV2LengthSquared(v)
         case Theta() => scalarizeV2Theta(v)
         case Normal => expecting match {
-          case Scalarized(_, X) => expectY(xf(v))
-          case Scalarized(_, Y) => UnOp(expectX(xf(v)), nme.UNARY_-)
+          case Scalarized(_, X) => expectV2Y(xf(v))
+          case Scalarized(_, Y) => UnOp(expectV2X(xf(v)), nme.UNARY_-)
           case _ => superXf(tree)
         }
         case Swap => expecting match {
-          case Scalarized(_, X) => expectY(xf(v))
-          case Scalarized(_, Y) => expectX(xf(v))
+          case Scalarized(_, X) => expectV2Y(xf(v))
+          case Scalarized(_, Y) => expectV2X(xf(v))
           case _ => superXf(tree)
         }
         case nme.UNARY_- => UnOp(xf(v), nme.UNARY_-)
@@ -176,7 +184,7 @@ trait Vector2Scalarizer extends ScalarizerSupport with ScalarReplacementInfo { s
         case Normalize() => expecting match {
           case Scalarized(_, comp) =>
             BinOp(xf(v), nme.DIV, scalarizeV2Length(v))
-          case Escaping(_, _) => NewObj(V2(), expectX(xf(tree)), expectY(xf(tree)))
+          case ActualType(_) => NewObj(V2(), expectV2X(xf(tree)), expectV2Y(xf(tree)))
           case _ => superXf(tree)
         }
         case _ => superXf(tree)
@@ -190,7 +198,7 @@ trait Vector2Scalarizer extends ScalarizerSupport with ScalarReplacementInfo { s
       case Ident(name) if scope.inlinedVar(name).isDefined || scope.normalVar(name).isDefined =>
         val iv = scope(name).asInstanceOf[IV2]
         val ref = expecting match {
-          case Escaping(_,_) => iv.lengthN.isDefined && !iv.lengthDirty
+          case ActualType(_) => iv.lengthN.isDefined && !iv.lengthDirty
           case _ => true
         }
         if (ref) {
@@ -198,7 +206,7 @@ trait Vector2Scalarizer extends ScalarizerSupport with ScalarReplacementInfo { s
           typed(Ident(iv.lengthN.get))
         } else
           MathFun(VecMath, Sqrt, scalarizeV2LengthSquared(v))
-      case _ if isReference(v) =>
+      case _ if !shouldScalarize(v, V2Scalarizable) =>
         // If it's a reference, not an expression we can optimize, cache only the length!
         val cvn = scope.cache.get(Select(v, Length)) match {
           case Some(ScalarVar(sym, _, _)) => sym
@@ -221,25 +229,25 @@ trait Vector2Scalarizer extends ScalarizerSupport with ScalarReplacementInfo { s
     }
 
     def scalarizeV2LengthSquared(v: Tree) = {
-      val x = BinOp(expectX(xf(v)), nme.MUL, expectX(xf(v)))
-      val y = BinOp(expectY(xf(v)), nme.MUL, expectY(xf(v)))              
+      val x = BinOp(expectV2X(xf(v)), nme.MUL, expectV2X(xf(v)))
+      val y = BinOp(expectV2Y(xf(v)), nme.MUL, expectV2Y(xf(v)))              
       BinOp(x, nme.ADD, y)
     }
 
     def scalarizeV2Theta(v: Tree) =
-      MathFun(VecMath, ATan2, expectY(xf(v)), expectX(xf(v)))
+      MathFun(VecMath, ATan2, expectV2Y(xf(v)), expectV2X(xf(v)))
 
     // Scalar returning BinOps
 
     def scalarizeV2DotV2(l: Tree, r: Tree) = {
-      val x = BinOp(expectX(xf(l)), nme.MUL, expectX(xf(r)))
-      val y = BinOp(expectY(xf(l)), nme.MUL, expectY(xf(r)))
+      val x = BinOp(expectV2X(xf(l)), nme.MUL, expectV2X(xf(r)))
+      val y = BinOp(expectV2Y(xf(l)), nme.MUL, expectV2Y(xf(r)))
       BinOp(x, nme.ADD, y)
     }
 
     def scalarizeV2CrossV2(l: Tree, r: Tree) = {
-      val x = BinOp(expectX(xf(l)), nme.MUL, expectY(xf(r)))
-      val y = BinOp(expectY(xf(l)), nme.MUL, expectX(xf(r)))
+      val x = BinOp(expectV2X(xf(l)), nme.MUL, expectV2Y(xf(r)))
+      val y = BinOp(expectV2Y(xf(l)), nme.MUL, expectV2X(xf(r)))
       BinOp(x, nme.SUB, y)
     }
 

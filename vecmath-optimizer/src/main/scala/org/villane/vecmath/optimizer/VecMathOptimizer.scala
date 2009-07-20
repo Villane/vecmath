@@ -9,6 +9,9 @@ import nsc.symtab.Flags._
 
 /**
  * Decides which methods to optimize and performs transformations on these methods.
+ * 
+ * This is the main plugin component that mixes in all the functionality provided in more
+ * specific traits.
  */
 class VecMathOptimizer(val global: Global) extends PluginComponent
   with Transform
@@ -34,8 +37,8 @@ class VecMathOptimizer(val global: Global) extends PluginComponent
     val vmTransformer = new VMTransformer(cu)
 
     def shouldOptimize(m: MemberDef) = m match {
-      case ClassDef(_,_,_,_) => m.mods.annotations.exists(_.tpe == srAnnot.tpe)
-      case ModuleDef(_,_,_) => m.mods.annotations.exists(_.tpe == srAnnot.tpe)
+      case ClassDef(_,_,_,_) => !m.mods.annotations.exists(_.tpe == nosrAnnot.tpe)
+      case ModuleDef(_,_,_) => !m.mods.annotations.exists(_.tpe == nosrAnnot.tpe)
       case _ => !m.mods.annotations.exists(_.tpe == nosrAnnot.tpe)
     }
 
@@ -59,17 +62,33 @@ class VecMathOptimizer(val global: Global) extends PluginComponent
     }
   }
 
-  def isReference(tree: Tree): Boolean = isReference(tree, V2.unapply)
-
-  // TODO isReference should be any statement that returns a vector/matrix
-  // except those that are handled by the scalarizers 
-  def isReference(tree: Tree, typeCheck: Tree => Boolean): Boolean = tree match {
-    // TODO only back out of scalarizing references if their length is not accessed (more than once?)
-    case Select(v, _) if !typeCheck(v) => isReference(v, typeCheck)
-    case Ident(_) => true
-    case Apply(sel, _) if sel == Array_apply && isV2(tree.tpe) => true
-    case If(cond, thenp, elsep) => isReference(thenp) || isReference(elsep)
-    case _ => false
+  /**
+   * shouldScalarize determines if an expression should be scalarized or left as is.
+   * Basically any expression that doesn't create a new Vector/Matrix should return false
+   * 
+   * The typeCheck argument should be V2.unnaply, M22.unapply etc.
+   */
+  def shouldScalarize(tree: Tree, sc: Scalarizable): Boolean = tree match {
+    case Ident(_) => false
+    case Literal(_) => false // excludes null for example
+    case Block(_,_) => false
+    // this should capture most references to vectors
+    case Select(v, _) if !sc.isTypeOf(v) => shouldScalarize(v, sc)
+    case Apply(Select(qual, sym), _) =>
+      if (sym == nme.apply && qual.tpe.typeSymbol == ArrayClass.tpe.typeSymbol && sc.isTypeOf(tree))
+        false
+      /*// find all cases that are not scalarizable
+      if (!isV2(qual.tpe) &&
+          !isM22(qual.tpe) &&
+          !isT2(qual.tpe) &&
+          !isFEXT(qual.tpe) &&
+          !isF(qual.tpe) &&
+          VecMath.tpe != qual.tpe && VecMath.tpe != qual.tpe.widen)
+        false
+      else*/
+        true
+    case If(cond, thenp, elsep) => shouldScalarize(thenp, sc) && shouldScalarize(elsep, sc)
+    case _ => true
   }
 
   class VMTransformer(cu: CompilationUnit) extends TypingTransformer(cu)
@@ -87,41 +106,37 @@ class VecMathOptimizer(val global: Global) extends PluginComponent
     // Alias to super.transform
     def superXf(tree: Tree) = super.transform(tree)
 
-  var currentVar: Option[ScalarizedVariable] = None
-  val expectedTypes = new collection.mutable.Stack[ExpectedType]
-  def expecting = if (expectedTypes.isEmpty) NoExpectations else expectedTypes.top
-  def expecting[T](expType: ExpectedType)(block: => T) = {
-    expectedTypes.push(expType)
-    try {
-      block
-    } catch {
-      case ex =>
-        throw ex
-    } finally {
-      expectedTypes.pop
+    var currentVar: Option[ScalarizedVariable] = None
+    val expectedTypes = new collection.mutable.Stack[ExpectedType]
+    def expecting = if (expectedTypes.isEmpty) NoExpectations else expectedTypes.top
+    def expecting[T](expType: ExpectedType)(block: => T) = {
+      expectedTypes.push(expType)
+      try {
+        block
+      } catch {
+        case ex => throw ex
+      } finally {
+        expectedTypes.pop
+      }
     }
-  }
 
-  def expect[T](tpe: Type, comp: Name)(block: => T) = expecting(Scalarized(tpe, comp))(block)
-  /*def expect(tpe: Type, comp: Name)(tree: Tree) = expecting(Scalarized(tpe, comp))(transform(tree))*/
+    def expectS[T](block: => T) = expecting(ActualType(FT))(block)
 
-  def expectS[T](block: => T) = expecting(ActualType(NativeScalar))(block)
-  def expectX[T](block: => T) = expecting(Scalarized(V2T, X))(block)
-  def expectY[T](block: => T) = expecting(Scalarized(V2T, Y))(block)
-  def expectA11[T](block: => T) = expecting(Scalarized(M22T, A11))(block)
-  def expectA12[T](block: => T) = expecting(Scalarized(M22T, A12))(block)
-  def expectA21[T](block: => T) = expecting(Scalarized(M22T, A21))(block)
-  def expectA22[T](block: => T) = expecting(Scalarized(M22T, A22))(block)
+    def cacheS(v: Tree, namePart: String): TermSymbol = cacheS(v, v, namePart)
 
     def cacheS(cacheFor: Tree, v: Tree, namePart: String) = {
-      // TODO analyse tree for immutability!
-      val temp = true
-      val name = scope.next(namePart)
-      name.setInfo(FT)
-      val vd = typed(ValDef(name, v))
-      scope.preTemps += vd
-      scope.cache(cacheFor) = ScalarVar(name, temp, v)
-      name
+      if (scope.cache.contains(cacheFor))
+        scope.cache(cacheFor).symbol.asInstanceOf[TermSymbol]
+      else {
+        // TODO analyse tree for immutability!
+        val temp = true
+        val name = scope.next(namePart)
+        name.setInfo(FT)
+        val vd = typed(ValDef(name, v))
+        scope.preTemps += vd
+        scope.cache(cacheFor) = ScalarVar(name, temp, v)
+        name
+      }
     }
 
     def cacheV2(v: Tree) = {
@@ -131,10 +146,10 @@ class VecMathOptimizer(val global: Global) extends PluginComponent
       // TODO is mutable?
       val iv = V2Scalarizable.newScalarizedVar(name.name, v)
       scope.inlinedVar(name.name) = iv
-      val xRhs = expectX(transform(v))
+      val xRhs = expectV2X(transform(v))
       val xv = typed(ValDef(iv.x.symbol, xRhs))
       scope.cache(xRhs) = ScalarVar(iv.x.symbol, temp, xRhs)
-      val yRhs = expectY(transform(v))
+      val yRhs = expectV2Y(transform(v))
       val yv = typed(ValDef(iv.y.symbol, yRhs))
       scope.cache(yRhs) = ScalarVar(iv.y.symbol, temp, yRhs)
       scope.preTemps += xv
@@ -150,7 +165,9 @@ class VecMathOptimizer(val global: Global) extends PluginComponent
   override def transform(tree: Tree): Tree = tree match {
     case tr @ DefDef(mods, name, a1, a2, a3, rhs) => inScope(tr) {
       try {
-        val res = typed(new Flattener(cu).transform(transform(rhs)))
+        var res = typed(new Flattener(cu).transform(transform(rhs)))
+        // THIS might use cached vars before they are defined
+        // res = new UseCachedIfPossible(cu).transform(res)
         typed(copy.DefDef(tr, mods, name, a1, a2, a3, res))
       } catch {
         // TODO backout must be method level
@@ -171,7 +188,7 @@ class VecMathOptimizer(val global: Global) extends PluginComponent
     // Local Variable
     case tr @ ValDef(mods, name, tpe, rhs) =>
       tpe match {
-        case Scalarizable(sc) if !isReference(rhs) =>
+        case Scalarizable(sc) if shouldScalarize(rhs, sc) =>
           val iv = sc.newScalarizedVar(tr)
           currentVar = Some(iv)
           scope.inlinedVar(name) = iv // TODO remove when backed out
@@ -190,7 +207,7 @@ class VecMathOptimizer(val global: Global) extends PluginComponent
           } finally {
             currentVar = None
           }
-        case Scalarizable(sc) if isReference(rhs) =>
+        case Scalarizable(sc) if !shouldScalarize(rhs, sc) =>
           scope.normalVar(name) = sc.newNormalVar(tr)
           super.transform(tree)
         case F() => // Float
@@ -225,7 +242,7 @@ class VecMathOptimizer(val global: Global) extends PluginComponent
     // Assignment to a non-scalarized variable
     case Assign(id@Ident(name), rhs) if scope.normalVar(name).isDefined =>
       val iv = scope(name).asInstanceOf[NormalVariable]
-      val varAssign = expecting(Escaping(null, iv.sc.classType)) {
+      val varAssign = expecting(ActualType(iv.sc.classType)) {
         typed(Assign(id, transform(rhs)))
       }
       if (iv.isInstanceOf[IV2]) {
@@ -235,11 +252,11 @@ class VecMathOptimizer(val global: Global) extends PluginComponent
       Sequence(addPreTemps(List(varAssign)))
 
     // New Vector2
-    case tr @ Apply(Select(New(V2()), nme.CONSTRUCTOR), List(x, y)) => expecting match {
-      case Scalarized(V2T, X) => expectS(xf(x))
-      case Scalarized(V2T, Y) => expectS(xf(y))
-      case Escaping(_, V2T) => NewObj(V2(), expectX(xf(x)), expectY(xf(y)))
-      case ActualType(V2T) => NewObj(V2(), expectX(xf(x)), expectY(xf(y)))
+    case tr @ Apply(Select(New(Scalarizable(sc)), nme.CONSTRUCTOR), args) => expecting match {
+      case Scalarized(tp, comp) if tp == sc.classType => expectS(xf(sc.componentFromArgs(args, comp)))
+      case ActualType(tp) if tp == sc.classType =>
+        NewObj(TypeTree(sc.classType),
+          (sc.scalarComponents zip args) map { ac => expecting(Scalarized(sc.classType, ac._1))(xf(ac._2)) } :_* )
       case _ => super.transform(tree)
     }
 
@@ -265,7 +282,7 @@ class VecMathOptimizer(val global: Global) extends PluginComponent
       if (scope.inlinedVar(name).isDefined) expecting match {
         // Apply replacements v.x -> v$x and so on
         case Scalarized(_,_) => typed(scalar(v, comp))
-        case ActualType(NativeScalar) => typed(scalar(v, comp))
+        case ActualType(FT) => typed(scalar(v, comp))
         case NoExpectations => typed(scalar(v, comp))
         case _ => tree
       } else tree
@@ -293,14 +310,14 @@ class VecMathOptimizer(val global: Global) extends PluginComponent
                 case (V2(), SimpleV2F(), F()) =>
                   BinOp(xf(left0), op, expectS(xf(arg0)))
                 case (V2(), Cross(), F()) => comp match {
-                  case X => BinOp(expectY(xf(left0)), nme.MUL, expectS(xf(arg0)))
-                  case Y => BinOp(expectX(xf(left0)), nme.MUL, UnOp(expectS(xf(arg0)), nme.UNARY_-))
+                  case X => BinOp(expectV2Y(xf(left0)), nme.MUL, expectS(xf(arg0)))
+                  case Y => BinOp(expectV2X(xf(left0)), nme.MUL, UnOp(expectS(xf(arg0)), nme.UNARY_-))
                 }
                 case (F(), SimpleV2F(), V2()) =>
                   BinOp(expectS(xf(left0)), op, xf(arg0))
                 case (F(), Cross(), V2()) => comp match {
-                  case X => BinOp(expectY(xf(arg0)), nme.MUL, UnOp(expectS(xf(left0)), nme.UNARY_-))
-                  case Y => BinOp(expectX(xf(arg0)), nme.MUL, expectS(xf(left0)))
+                  case X => BinOp(expectV2Y(xf(arg0)), nme.MUL, UnOp(expectS(xf(left0)), nme.UNARY_-))
+                  case Y => BinOp(expectV2X(xf(arg0)), nme.MUL, expectS(xf(left0)))
                 }
                 // V2 op V2
                 case (V2(), SimpleV2V2(), V2()) =>
@@ -315,13 +332,47 @@ class VecMathOptimizer(val global: Global) extends PluginComponent
                 // Other
                 case _ =>
                   // for example array.apply(idx) -> array.apply(idx).x
-                  typed(scalar(BinOp(xf(left0), op, xf(arg0)), comp))
+                  typed(scalar(BinOp(expecting(NoExpectations)(xf(left0)), op, expecting(NoExpectations)(xf(arg0))), comp))
               }
-            case Escaping(_,_) => //BinOp(xf(left0), op, xf(arg0))
-              NewObj(V2(), expectX(xf(tr)), expectY(xf(tr)))
+            case ActualType(_) => //BinOp(xf(left0), op, xf(arg0))
+              (left0, arg0) match {
+                // TODO temporary experiment
+                // TODO this should catch statements that don't need inlining
+                  // since they create the same amount of vectors anyway!
+                /*case (Ident(l), Scalarizable(sc2))
+                  if !shouldScalarize(arg0, sc2) => BinOp(left0, op, arg0)*/
+                case _=> NewObj(V2(), expectV2X(xf(tr)), expectV2Y(xf(tr)))
+              }
+
+            case _ =>
+              (left0, op, arg0) match {
+                // float extensions are removed here
+                // TODO only when escaping?
+                case (F(), SimpleV2F(), V2()) =>
+                  NewObj(V2(), BinOp(expectS(xf(left0)), op, expectV2X(xf(arg0)))
+                             , BinOp(expectS(xf(left0)), op, expectV2Y(xf(arg0))))
+                case (F(), Cross(), V2()) =>
+                  NewObj(V2(), BinOp(expectV2Y(xf(arg0)), nme.MUL, UnOp(expectS(xf(left0)), nme.UNARY_-))
+                             , BinOp(expectV2X(xf(arg0)), nme.MUL, expectS(xf(left0))))
+                case _ =>
+                  BinOp(xf(left0), op, xf(arg0))
+              }
+          }
+        case M22() =>
+          expecting match {
+            case Scalarized(M22T, comp) =>
+              (left0, op, arg0) match {
+                // V2 op Float or vice versa
+                case (M22(), SimpleM22M22(), M22()) => BinOp(xf(left0), op, xf(arg0))
+                // Other
+                case _ =>
+                  // for example array.apply(idx) -> array.apply(idx).x
+                  typed(scalar(BinOp(expecting(NoExpectations)(xf(left0)), op, expecting(NoExpectations)(xf(arg0))), comp))
+              }
+            case ActualType(_) => NewObj(V2(), expectV2X(xf(tr)), expectV2Y(xf(tr)))
             case _ => BinOp(xf(left0), op, xf(arg0))
           }
-        case _ => super.transform(tr)
+        case _ => expecting(NoExpectations)(super.transform(tr))
       }
 
     // Reference to scalarized variable
@@ -329,10 +380,7 @@ class VecMathOptimizer(val global: Global) extends PluginComponent
       // Scalarize if necessary
       case Scalarized(_, comp) => typed(scalar(tree, comp))
       // Descalarize if escaping
-      case Escaping(name, _) => typed(deScalarize(tree))
-      // ONLY DESCALARIZE ESCAPING!!! case ActualType(_) => typed(deScalarize(tr))
-      // We expect this will be scalarized in an outer scope
-      case _ => tree
+      case _ => typed(deScalarize(tree))
     }
 
     // Reference to non-scalarized value
@@ -343,29 +391,16 @@ class VecMathOptimizer(val global: Global) extends PluginComponent
       case _ => tree
     }
 
-    case tr @ Block(stats, xpr @ Scalarizable(sc)) =>
-      val sts = transformStats(stats, currentOwner)
-      val xp = xpr match {
-        case Ident(name) if scope.inlinedVar(name).isDefined =>
-          // A scalarized variable is escaping!
-          expecting(Escaping(name, sc.classType)) { transform(xpr) }
-        //case BinOp(_,_,_) => NewObj(V2(), expectX(xf(xpr)), expectY(xf(xpr)))
-        //case UnOp(_,_) => NewObj(V2(), expectX(xf(xpr)), expectY(xf(xpr)))
-        case _ => expecting(Escaping(null, sc.classType)) { transform(xpr) }
-      }
-      // got pretemps from xpr: addPreTemps(xp)
-      typed(Block(sts, xp))
-    case tr @ Block(stats, xpr) =>
-      val sts = transformStats(stats, currentOwner)
-      val xp = xpr match {
-        case _ => expecting(Escaping(null,null))(transform(xpr))
-      }
-      typed(Block(sts, xp))
+    case Function(vDefs, body) =>
+      // don't transform valdefs!
+      Function(vDefs, expecting(ActualType(body.tpe))(xf(body)))
+
+    case tr @ Block(_,_) => transformBlock(tr, currentOwner)
 
     case tr @ Return(v@Ident(name)) if scope.inlinedVar(name).isDefined =>
-      expecting(Escaping(name, tr.tpe)) { typed(Return(transform(v))) }
+      expecting(ActualType(tr.tpe)) { typed(Return(transform(v))) }
     case tr @ Return(v) =>
-      expecting(Escaping(null, null)) { copy.Return(tr, transform(v)) }
+      expecting(ActualType(tr.tpe)) { copy.Return(tr, transform(v)) }
 
     case tr @ If(cond, thenp, elsep) => expecting match {
       //case Scalarized(_,_) => throw BackOut("If not supported!")
@@ -411,8 +446,35 @@ class VecMathOptimizer(val global: Global) extends PluginComponent
       } else {
         //println("Tree (" + tree + "): " + tree.tpe + ", widen: " + tree.tpe.widen)
         //println(isV2(tree.tpe))
-        super.transform(tree)
+        try {
+          super.transform(tree)
+        } catch {
+          case e => println("ERROR transforming: " + tree.getClass + "\n" + tree); throw e
+        }
       }
+  }
+
+  def transformBlock(block: Block, exprOwner: Symbol) = {
+    val sts = List.mapConserve(block.stats) { stat =>
+      if (exprOwner != currentOwner && stat.isTerm)
+        prependTemps(atOwner(exprOwner)(transform(stat)))
+      else
+        prependTemps(transform(stat))
+    } filter (EmptyTree !=)
+    val xp = prependTemps(expecting(ActualType(block.expr.tpe))(xf(block.expr)))
+    typed(Block(sts, xp))
+  }
+
+  def prependTemps(stat: Tree) = {
+    var st = new UseCachedIfPossible(cu).transform(stat)
+    // reuse the preTemps ListBuffer here, since we are going to clear it anyway!
+    if (!scope.preTemps.isEmpty) {
+      scope.preTemps += st
+      st = Sequence(scope.preTemps.toList)
+      scope.preTemps.clear
+      scope.cache.retain((tree, v) => !v.temp)
+    }
+    st
   }
 
   def addPreTemps(stats: List[Tree]) = {
@@ -475,7 +537,7 @@ class VecMathOptimizer(val global: Global) extends PluginComponent
           case _ => stats2 += stat
         }}
         val expr2 = transform(expr) match {
-          case Sequence(ls) => throw new Error("should not happen")
+          case Sequence(ls) => stats2 ++= ls.init; ls.last
           case exp => exp
         }
         localTyper.typed(Block(stats2.toList, expr2))

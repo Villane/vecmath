@@ -27,6 +27,7 @@ trait VecMathOperations { self: VecMathOptimizer =>
   // V2 Binary
   val SimpleV2FOps = Set(nme.MUL, nme.DIV)
   val SimpleV2V2Ops = Set(nme.ADD, nme.SUB)
+  val SimpleM22M22Ops = Set(nme.ADD)
   val CrossOp = Set(newTermName("$u00D7"), newTermName("cross"))
   val DotOp = Set(newTermName("$u2219"), newTermName("dot"))
 
@@ -34,6 +35,7 @@ trait VecMathOperations { self: VecMathOptimizer =>
   object Theta { def unapply(op: Name) = ThetaOps contains op }
   object SimpleV2F { def unapply(op: Name) = SimpleV2FOps contains op }
   object SimpleV2V2 { def unapply(op: Name) = SimpleV2V2Ops contains op }
+  object SimpleM22M22 { def unapply(op: Name) = SimpleM22M22Ops contains op }
   object Cross { def unapply(op: Name) = CrossOp contains op }
   object Dot { def unapply(op: Name) = DotOp contains op }
 
@@ -43,4 +45,12 @@ trait VecMathOperations { self: VecMathOptimizer =>
   // Transform2
   val Pos = "pos" // position
   val Rot = "rot" // rotation
+
+  val ToFloat = newTermName("toFloat")
+
+  /*case Scalar() => tree match {
+    case Literal(c @ Constant(_)) => super.transform(Literal(c.floatValue))
+    case _ => typed(Select(super.transform(tree), ToFloat))
+  }*/
+
 }

@@ -41,7 +41,17 @@ trait Matrix22Scalarizer extends ScalarizerSupport with ScalarReplacementInfo { 
   // Creator names
   val Rotation = newTermName("rotation")
 
+  // Unary ops
+  val Invert = newTermName("invert")
+  val Transpose = newTermName("transpose")
+  val Determinant = newTermName("determinant")
+
   trait M22Transformer { self: VMTransformer =>
+
+    def expectM22A11[T](block: => T) = expecting(Scalarized(M22T, A11))(block)
+    def expectM22A12[T](block: => T) = expecting(Scalarized(M22T, A12))(block)
+    def expectM22A21[T](block: => T) = expecting(Scalarized(M22T, A21))(block)
+    def expectM22A22[T](block: => T) = expecting(Scalarized(M22T, A22))(block)
 
     object M22Scalarizable extends Scalarizable {
       type ClassType = Matrix22
@@ -61,6 +71,13 @@ trait Matrix22Scalarizer extends ScalarizerSupport with ScalarReplacementInfo { 
         Rotation -> scalarizeM22Rotation
       )
 
+      def componentFromArgs(args: List[Tree], comp: Name) = comp match {
+        case A11 => args(0)
+        case A12 => args(1)
+        case A21 => args(2)
+        case A22 => args(3)
+      }
+
       def scalarValue(m: Matrix22, name: Name) = name match {
         case A11 => m.a11
         case A12 => m.a12
@@ -71,7 +88,7 @@ trait Matrix22Scalarizer extends ScalarizerSupport with ScalarReplacementInfo { 
       def newNormalVar(vDef: ValDef) = new IM22(vDef.name, vDef) with NormalVariable
       def newScalarizedVar(vDef: ValDef) = new IM22(vDef.name, vDef) with ScalarizedVariable
 
-      def optimizeSelect(m: Select) = m
+      def optimizeSelect(tree: Select) = optimizeM22UnaryOp(tree)
 
     }
 
@@ -85,43 +102,42 @@ trait Matrix22Scalarizer extends ScalarizerSupport with ScalarReplacementInfo { 
 
     def scalarizeM22Rotation(args: Seq[Tree], comp: Name) = {
       val angle = xf(args(0))
-      // TODO MUST CACHE cos & sin in variables!!!
       // (c, -s, s, c)
       comp match {
-        case A11 => MathFun(VecMath, Cos, angle)
-        case A12 => UnOp(MathFun(VecMath, Sin, angle), nme.UNARY_-)
-        case A21 => MathFun(VecMath, Sin, angle)
-        case A22 => MathFun(VecMath, Cos, angle)
+        case A11 => Ident(cacheS(MathFun(VecMath, Cos, angle), "cos")) 
+        case A12 => UnOp(Ident(cacheS(MathFun(VecMath, Sin, angle), "sin")), nme.UNARY_-)
+        case A21 => Ident(cacheS(MathFun(VecMath, Sin, angle), "sin"))
+        case A22 => Ident(cacheS(MathFun(VecMath, Cos, angle), "cos"))
       }
     }
 
     def scalarizeM22MulV2(m: Tree, v: Tree) = expecting match {
       //X=a11 * v.x + a12 * v.y
       case Scalarized(V2T, X) => BinOp(
-        BinOp(expectA11(xf(m)), nme.MUL, xf(v)),
+        BinOp(expectM22A11(xf(m)), nme.MUL, xf(v)),
         nme.ADD,
-        BinOp(expectA12(xf(m)), nme.MUL, expectY(xf(v)))
+        BinOp(expectM22A12(xf(m)), nme.MUL, expectV2Y(xf(v)))
       )
       //Y=a21 * v.x + a22 * v.y
       case Scalarized(V2T, Y) => BinOp(
-        BinOp(expectA21(xf(m)), nme.MUL, expectX(xf(v))),
+        BinOp(expectM22A21(xf(m)), nme.MUL, expectV2X(xf(v))),
         nme.ADD,
-        BinOp(expectA22(xf(m)), nme.MUL, xf(v))
+        BinOp(expectM22A22(xf(m)), nme.MUL, xf(v))
       )
     }
 
     def scalarizeM22MulTransV2(m: Tree, v: Tree) = expecting match {
       //X=a11 * v.x + a21 * v.y
       case Scalarized(V2T, X) => BinOp(
-        BinOp(expectA11(xf(m)), nme.MUL, xf(v)),
+        BinOp(expectM22A11(xf(m)), nme.MUL, xf(v)),
         nme.ADD,
-        BinOp(expectA21(xf(m)), nme.MUL, expectY(xf(v)))
+        BinOp(expectM22A21(xf(m)), nme.MUL, expectV2Y(xf(v)))
       )
       //Y=a12 * v.x + a22 * v.y
       case Scalarized(V2T, Y) => BinOp(
-        BinOp(expectA12(xf(m)), nme.MUL, expectX(xf(v))),
+        BinOp(expectM22A12(xf(m)), nme.MUL, expectV2X(xf(v))),
         nme.ADD,
-        BinOp(expectA22(xf(m)), nme.MUL, xf(v))
+        BinOp(expectM22A22(xf(m)), nme.MUL, xf(v))
       )
     }
 
@@ -161,6 +177,34 @@ trait Matrix22Scalarizer extends ScalarizerSupport with ScalarReplacementInfo { 
         MulTrans,
         BinOp(v, nme.SUB, Select(t, Pos))
       ))
+    }
+
+    def optimizeM22UnaryOp(tree: Select) = {
+      val m = tree.qualifier
+      val op = tree.selector
+      op match {
+        case Determinant => scalarizeM22Determinant(m)
+        case Invert => scalarizeV2LengthSquared(m)
+        case Transpose => expecting match {
+          case Scalarized(M22T, A11) => xf(m)
+          case Scalarized(M22T, A12) => expectM22A21(xf(m))
+          case Scalarized(M22T, A21) => expectM22A12(xf(m))
+          case Scalarized(M22T, A22) => xf(m)
+          case _ => superXf(tree)
+        }
+        case Abs => expecting match {
+          case Scalarized(_, comp) => BinOp(StdMath, Abs, transform(m))
+          case _ => superXf(tree)
+        }
+        case _ => superXf(tree)
+      }
+    }
+
+    def scalarizeM22Determinant(m: Tree) = {
+      // a11 * a22 - a12 * a21
+      val x = BinOp(expectM22A11(xf(m)), nme.MUL, expectM22A22(xf(m)))
+      val y = BinOp(expectM22A12(xf(m)), nme.MUL, expectM22A21(xf(m)))              
+      BinOp(x, nme.DIV, y)
     }
 
   }

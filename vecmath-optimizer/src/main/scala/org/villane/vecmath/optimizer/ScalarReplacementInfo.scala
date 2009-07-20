@@ -17,15 +17,11 @@ trait ScalarReplacementInfo { self: VecMathOptimizer =>
   case object NoExpectations extends ExpectedType {
     val tpe = NoType
   }
-  case class Escaping(name: Name, tpe: Type) extends ExpectedType
   case class ActualType(tpe: Type) extends ExpectedType
   case class Scalarized(objType: Type, comp: Name) extends ExpectedType {
-    val tpe = NativeScalar
+    val tpe = FT
   }
 
-  //var stack = new collection.immutable.Stack[ScopedInfo]
-
-  //def isOutermost = stack.size == 1
   def isOutermost = currentScope.isDefined && scope.parent.isEmpty
 
   var currentScope: Option[ScopeInfo] = None
@@ -150,7 +146,7 @@ trait ScalarReplacementInfo { self: VecMathOptimizer =>
     val components = Map(sc.scalarComponents map { n =>
       // used to be: if (vDef.isInstanceOf[ValDef]) vDef.symbol.newValue(vDef.pos, name + "$x")
       val cSym = scope.method.symbol.newValue(vDef.pos, name + "$" + n)
-      cSym.setInfo(NativeScalar).setFlag(SYNTHETIC)
+      cSym.setInfo(FT).setFlag(SYNTHETIC)
       cSym.setFlag(if (isMutable) MUTABLE else FINAL)
       n -> Ident(cSym)
     }:_*)
@@ -172,17 +168,23 @@ trait ScalarReplacementInfo { self: VecMathOptimizer =>
 
   }
 
-  // Scalarize for specific coordinate (X,Y,A11,A12 etc.)
-  def scalar(v: Tree, coord: Name) = v match {
-    case Ident(name) if scope.inlinedVar(name).isDefined =>
-      scope(name).scalar(coord)
-    case _ => Select(v, coord)
+  /**
+   * Scalarize for specific component (Vector2.x, Vector2.y, Matrix22.a11 etc.)
+   * If the tree is Ident of a scalarized variable, the variable for the component will be returned
+   * Otherwise, Select(v, comp) is returned
+   */
+  def scalar(v: Tree, comp: Name) = v match {
+    case Ident(name) if scope.inlinedVar(name).isDefined => scope(name).scalar(comp)
+    case _ => Select(v, comp)
   }
 
-  // Descaralrize an escaping variable. Ex. new Vector2(v$x, v$y)
+  /**
+   * DeScalarize the tree.
+   * If the tree is Ident of a scalarized variable, it will be descalarized 
+   * Otherwise, the tree itself is returned (no need to descalarize what is not scalarized)
+   */
   def deScalarize(v: Tree) = v match {
-    case Ident(name) if scope.inlinedVar(name).isDefined =>
-      scope(name).deScalarize
+    case Ident(name) if scope.inlinedVar(name).isDefined => scope(name).deScalarize
     case _ => v
   }
 

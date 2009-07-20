@@ -21,7 +21,6 @@ trait VecMathTypes { self: VecMathOptimizer =>
 
   // Vector, Matrix, Transform types
   val FT = FloatClass.tpe
-  val NativeScalar = FT
   val FEXTT = definitions.getClass("org.villane.vecmath.FloatExtensions").tpe
   val T2T = definitions.getClass("org.villane.vecmath.Transform2").tpe
 
