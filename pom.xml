@@ -12,13 +12,18 @@
 		<module>vecmath-test</module>
 	</modules>
 	<properties>
-		<scala.version>2.7.5</scala.version>
+		<scala.version>2.9.0-SNAPSHOT</scala.version>
 	</properties>
 	<repositories>
 		<repository>
 			<id>scala-tools.org</id>
 			<name>Scala-Tools Maven2 Repository</name>
 			<url>http://scala-tools.org/repo-releases</url>
+		</repository>
+		<repository>
+			<id>scala-tools.org-releases</id>
+			<name>Scala-Tools Maven2 SNAPSHOTS Repository</name>
+			<url>http://scala-tools.org/repo-snapshots</url>
 		</repository>
 	</repositories>
 	<pluginRepositories>

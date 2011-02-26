@@ -6,7 +6,7 @@ package org.villane.vecmath
 class Vector2Times(start: Vector2, times: Int, step: Vector2)
   extends Iterable[Vector2] {
 
-  def elements = new Iterator[Vector2] {
+  def iterator = new Iterator[Vector2] {
     var v = start
     var n = times
     def hasNext = n >= 0

@@ -6,7 +6,7 @@ package org.villane.vecmath
 class Vector2Range(start: Vector2, end: Vector2, step: Vector2)
   extends Iterable[Vector2] {
 
-  def elements = new Iterator[Vector2] {
+  def iterator = new Iterator[Vector2] {
     var v = start
     def hasNext = inInterval(v)
     def next = {
