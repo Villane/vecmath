@@ -1,0 +1,9 @@
+h1. Vector Math Library for 2D Games
+
+vecmath implements 2d vectors and matrices for use in 2D games and game engines written in Scala.
+
+h2. Currently being update
+
+Note: the code is currently being updated for newer Scala versions (2.8, 2.9).
+
+vecmath-optimizer is a Scala compiler plug-in that worked with 2.7.5 but doesn't work any more. It may get updated in the future. If you want to use just the library, you can remove vecmath-optimizer and vecmath-test modules from the parent pom.xml.
